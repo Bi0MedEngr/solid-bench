@@ -1,10 +1,19 @@
 // Checks: every property against a closed-form or hand answer. Run: node tests/test_core.js
-const C = require('../core.js'), P = require('../presets.js'), THREE = require('../vendor/three.min.js');
+const C = require('../core.js'), P = require('../presets.js'), THREE = require('../vendor/three.min.js'), IM = require('../importers.js'), zlib = require('zlib');
 const PI = Math.PI;
 let fails = 0;
 const near = (a, b, tol, msg) => { const ok = Math.abs(a - b) <= tol; if (!ok) fails++; console.log((ok ? 'PASS ' : 'FAIL ') + msg + `  got ${(+a).toPrecision(8)} want ${(+b).toPrecision(8)}`); };
 const rel = (a, b, r, msg) => near(a, b, Math.abs(b) * r, msg);
 const prim = (type, dims) => ({ type, dims });
+C.setTriangulator((c, hs) => THREE.ShapeUtils.triangulateShape(c.map(p => new THREE.Vector2(p[0], p[1])), hs.map(h => h.map(p => new THREE.Vector2(p[0], p[1])))));
+const skp = (type, plane, ents, dims, extra) => Object.assign({ id: 's', name: 's', type, sketch: { plane, offset: 0, ents }, dims, base: [0, 0, 0], pos: [0, 0, 0], rot: [0, 0, 0], mat: 'custom', rho: 1000, visible: true }, extra || {});
+const meshAgrees = (p, tag, seg = 192, tol = 3e-3) => {
+  const e = C.exactProps(p), m = C.meshProps(C.partMesh(p, seg).pos), ck = C.meshCheck(C.partMesh(p, 48).pos);
+  rel(m.V, e.V, tol, `${tag}: mesh volume agrees with exact`);
+  for (let i = 0; i < 3; i++) near(m.c[i], e.c[i], 0.02 + 1e-3 * Math.abs(e.c[i]), `${tag}: mesh centroid[${i}]`);
+  rel(m.I[0][0] + m.I[1][1] + m.I[2][2], e.I[0][0] + e.I[1][1] + e.I[2][2], tol, `${tag}: mesh inertia trace`);
+  near(ck.closed ? 1 : 0, 1, 0, `${tag}: mesh is watertight (${ck.open} open, ${ck.nonManifold} non-manifold)`);
+};
 
 // ---- exact props vs textbook (Roark / Gere, solids of revolution) ----
 { const p = C.exactProps(prim('box', { w: 40, h: 20, d: 30 })), V = 40 * 20 * 30;
@@ -89,6 +98,12 @@ for (const r of [[30, 0, 20], [10, -50, 75], [90, 45, -30]]) {
 { const s = C.solve(P.list.rocket()), mb = 1.2e-3 * PI * 100 * 80, mn = 1.05e-3 * PI * 100 * 30 / 3, mf = 1.24e-3 * 18 * 25 * 1.5;
   near(s.M, mb + mn + 3 * mf, 1e-9, 'rocket: mass'); near(s.C[1], (mb * 40 + mn * (80 + 7.5) + 3 * mf * 12.5) / (mb + mn + 3 * mf), 1e-9, 'rocket: CG height');
   near(Math.hypot(s.C[0], s.C[2]), 0, 1e-9, 'rocket: CG on axis (3 fins at 120°)'); near(s.I[0][0] - s.I[2][2], 0, 1e-6, 'rocket: Ixx = Izz (3-fold symmetry)'); }
+{ const s = C.solve(P.list.plate()), Ar = 80 * 50 - (4 - PI) * 36 - 4 * PI * 3.25 ** 2 - PI * 121;
+  rel(s.M, 2.7e-3 * Ar * 6, 1e-6, 'mounting plate: mass from filleted outline minus five holes'); near(s.C[1], 3, 1e-9, 'mounting plate: centroid at half thickness');
+  near(s.C[0], 0, 1e-6, 'mounting plate: symmetric about X'); meshAgrees(P.list.plate().parts[0], 'mounting plate'); }
+{ const s = C.solve(P.list.turned()), Vsteps = PI * (100 * 20 + 49 * 40 + 25 * 15);
+  rel(s.V, Vsteps, 5e-3, 'turned shaft: volume close to the sharp-cornered steps (fillets change it slightly)');
+  near(Math.hypot(s.C[0], s.C[2]), 0, 1e-9, 'turned shaft: centroid on its axis'); meshAgrees(P.list.turned().parts[0], 'turned shaft'); }
 { const s = C.solve(P.list.tilted()); near(s.principal.values[0] > 0 ? 1 : 0, 1, 0, 'tilted plate: principal moments positive'); }
 // hidden parts drop out
 { const m = P.list.dumbbell(); m.parts[1].visible = false; m.parts[2].visible = false;
@@ -112,6 +127,112 @@ endsolid t`;
   near(mp.V, 1 / 6, 1e-12, 'ASCII STL unit tetrahedron volume 1/6'); near(mp.c[0], 0.25, 1e-12, 'tetrahedron centroid 1/4');
   near(mp.I[0][0], 1 / 30 - (1 / 6) * 2 * 0.0625, 1e-12, 'tetrahedron Ixx (∫(y²+z²) = 1/30, shifted)'); }
 
+// ---- sketches: extrude and revolve vs closed forms ----
+{ // rectangle on the front plane extruded 30 → a 40 × 20 × 30 box from (5, 2, 0)
+  const p = skp('extrude', 'front', [{ kind: 'rect', x: 5, y: 2, w: 40, h: 20 }], { d: 30 }), e = C.exactProps(p), V = 24000;
+  near(e.V, V, 1e-6, 'extruded rectangle: volume'); near(e.A, 2 * (800 + 600 + 1200), 1e-6, 'extruded rectangle: area');
+  near(e.c[0], 25, 1e-9, 'extruded rectangle: centroid x'); near(e.c[1], 12, 1e-9, 'extruded rectangle: centroid y'); near(e.c[2], 15, 1e-9, 'extruded rectangle: centroid z');
+  near(e.I[0][0], V * (20 ** 2 + 30 ** 2) / 12, 1e-3, 'extruded rectangle: Ixx = box'); near(e.I[2][2], V * (40 ** 2 + 20 ** 2) / 12, 1e-3, 'extruded rectangle: Izz = box'); near(e.I[0][1], 0, 1e-3, 'extruded rectangle: Ixy = 0');
+  meshAgrees(p, 'extruded rectangle', 48, 1e-9);
+  const q = skp('extrude', 'front', [{ kind: 'rect', x: 5, y: 2, w: 40, h: 20 }], { d: -30 });
+  near(C.exactProps(q).c[2], -15, 1e-9, 'negative distance extrudes the other way'); meshAgrees(q, 'negative extrude', 48, 1e-9); }
+{ // circle on the ground plane extruded up → cylinder about Y
+  const r = 15, h = 40, p = skp('extrude', 'ground', [{ kind: 'circle', x: 0, y: 0, r }], { d: h }), e = C.exactProps(p), V = PI * r * r * h;
+  rel(e.V, V, 1e-6, 'extruded circle: volume πr²h'); rel(e.A, 2 * PI * r * r + 2 * PI * r * h, 1e-6, 'extruded circle: area');
+  near(e.c[1], h / 2, 1e-9, 'extruded circle: centroid at mid-height (Y)');
+  rel(e.I[1][1], V * r * r / 2, 1e-6, 'extruded circle: Iyy = mr²/2'); rel(e.I[0][0], V * (3 * r * r + h * h) / 12, 1e-6, 'extruded circle: Ixx = m(3r²+h²)/12');
+  meshAgrees(p, 'extruded circle'); }
+{ // 60 × 40 plate, 5 thick, with a Ø16 hole 10 mm off center: (plate) − (hole) by parallel axis
+  const p = skp('extrude', 'ground', [{ kind: 'rect', x: -30, y: -20, w: 60, h: 40 }, { kind: 'circle', x: 10, y: 0, r: 8 }], { d: 5 }), e = C.exactProps(p);
+  const Vp = 60 * 40 * 5, Vh = PI * 64 * 5, V = Vp - Vh, cx = (0 - Vh * 10) / V;
+  rel(e.V, V, 1e-6, 'plate with hole: volume'); near(e.c[0], cx, 1e-5, 'plate with hole: centroid shifts away from the hole');
+  rel(e.A, 2 * (2400 - PI * 64) + (200 + 2 * PI * 8) * 5, 1e-6, 'plate with hole: area includes the bore');
+  const Iyy = Vp * (60 ** 2 + 40 ** 2) / 12 + Vp * cx * cx - (Vh * 64 / 2 + Vh * (10 - cx) ** 2);
+  rel(e.I[1][1], Iyy, 1e-6, 'plate with hole: Iyy (plate − hole, parallel axis)');
+  meshAgrees(p, 'plate with hole'); }
+{ // corner radius 5 on a 40 × 20 rectangle: area 800 − (4 − π)·25, perimeter 120 − 40 + 10π
+  const p = skp('extrude', 'front', [{ kind: 'rect', x: 0, y: 0, w: 40, h: 20, rr: 5 }], { d: 10 }), e = C.exactProps(p), Ar = 800 - (4 - PI) * 25;
+  rel(e.V, Ar * 10, 1e-6, 'filleted rectangle: volume'); rel(e.A, 2 * Ar + (80 + 10 * PI) * 10, 1e-6, 'filleted rectangle: area');
+  meshAgrees(p, 'filleted rectangle');
+  const f = skp('extrude', 'front', [{ kind: 'poly', pts: [[0, 0], [20, 0], [20, 20], [0, 20]], f: [0, 0, 6, 0] }], { d: 1 });
+  rel(C.exactProps(f).V, 400 - (1 - PI / 4) * 36, 1e-6, 'one filleted corner removes (1 − π/4)r²');
+  const full = skp('extrude', 'front', [{ kind: 'rect', x: 0, y: 0, w: 20, h: 20, rr: 10 }], { d: 1 });
+  rel(C.exactProps(full).V, PI * 100, 1e-6, 'square with corner radius = half side is a circle'); meshAgrees(full, 'fully rounded square');
+  near(C.dimProblem(skp('extrude', 'front', [{ kind: 'rect', x: 0, y: 0, w: 20, h: 10, rr: 6 }], { d: 1 })) ? 1 : 0, 1, 0, 'fillet larger than the side → plain warning'); }
+{ // revolve: rectangle 10 ≤ u ≤ 15, 0 ≤ v ≤ 30 about the v axis → tube
+  const ri = 10, ro = 15, h = 30, p = skp('revolve', 'front', [{ kind: 'rect', x: ri, y: 0, w: ro - ri, h }], { angle: 360 }), e = C.exactProps(p), V = PI * (ro * ro - ri * ri) * h;
+  rel(e.V, V, 1e-9, 'revolved rectangle: tube volume (Pappus)'); rel(e.A, 2 * PI * (ro * ro - ri * ri) + 2 * PI * (ro + ri) * h, 1e-9, 'revolved rectangle: tube area');
+  near(e.c[1], h / 2, 1e-9, 'revolved rectangle: centroid height'); near(Math.hypot(e.c[0], e.c[2]), 0, 1e-9, 'revolved rectangle: centroid on axis');
+  rel(e.I[1][1], V * (ro * ro + ri * ri) / 2, 1e-9, 'revolved rectangle: axial m(ro²+ri²)/2'); rel(e.I[0][0], V * (3 * (ro * ro + ri * ri) + h * h) / 12, 1e-9, 'revolved rectangle: transverse');
+  meshAgrees(p, 'revolved tube');
+  // 90° of it: a quarter tube, centroid at 4(ro³−ri³)/(3π(ro²−ri²)) along each in-plane axis
+  const q = skp('revolve', 'front', [{ kind: 'rect', x: ri, y: 0, w: ro - ri, h }], { angle: 90 }), eq = C.exactProps(q), xbar = 4 * (ro ** 3 - ri ** 3) / (3 * PI * (ro * ro - ri * ri));
+  rel(eq.V, V / 4, 1e-9, 'quarter revolve: volume'); near(eq.c[0], xbar, 1e-9, 'quarter revolve: centroid x'); near(eq.c[2], -xbar, 1e-9, 'quarter revolve: centroid z (turns toward −Z)');
+  rel(eq.A, (2 * PI * (ro * ro - ri * ri) + 2 * PI * (ro + ri) * h) / 4 + 2 * (ro - ri) * h, 1e-9, 'quarter revolve: area incl. two caps');
+  meshAgrees(q, 'quarter revolve');
+  const n = skp('revolve', 'front', [{ kind: 'rect', x: -ro, y: 0, w: ro - ri, h }], { angle: 90 }), en = C.exactProps(n);
+  near(en.c[0], -xbar, 1e-9, 'profile left of the axis revolves where it was drawn'); meshAgrees(n, 'left-side quarter revolve');
+  const u = skp('revolve', 'front', [{ kind: 'rect', x: 0, y: ri, w: h, h: ro - ri }], { angle: 360 }, { axis: 'u' }), eu = C.exactProps(u);
+  rel(eu.I[0][0], V * (ro * ro + ri * ri) / 2, 1e-9, 'revolve about the U axis: tube along world X'); near(eu.c[0], h / 2, 1e-9, 'revolve about U: centroid along X');
+  meshAgrees(u, 'revolve about U');
+  near(C.dimProblem(skp('revolve', 'front', [{ kind: 'rect', x: -5, y: 0, w: 10, h: 10 }], { angle: 360 })) ? 1 : 0, 1, 0, 'profile across the axis → plain warning'); }
+{ // revolve a circle → torus;  revolve a filleted profile about the axis
+  const R = 20, r = 5, p = skp('revolve', 'right', [{ kind: 'circle', x: R, y: 10, r }], { angle: 360 }), e = C.exactProps(p), V = 2 * PI * PI * R * r * r;
+  rel(e.V, V, 1e-6, 'revolved circle: torus volume'); rel(e.A, 4 * PI * PI * R * r, 1e-6, 'revolved circle: torus area');
+  rel(e.I[1][1], V * (R * R + 0.75 * r * r), 1e-6, 'revolved circle on the right plane (V axis = world Y): axial inertia Iyy');
+  meshAgrees(p, 'revolved torus');
+  const g = skp('revolve', 'ground', [{ kind: 'poly', pts: [[0, 0], [12, 0], [12, 8], [6, 8], [6, 20], [0, 20]], f: [0, 2, 0, 1.5, 0, 0] }], { angle: 360 });
+  const ring = skp('revolve', 'front', [{ kind: 'rect', x: 10, y: 0, w: 10, h: 10 }, { kind: 'circle', x: 15, y: 5, r: 2 }], { angle: 270 });
+  rel(C.exactProps(ring).V, 1.5 * PI * (15 * 100 - 15 * PI * 4), 1e-6, 'revolved profile with a hole: Pappus with r̄ = 15 for both'); meshAgrees(ring, 'revolve with an internal hole, 270°');
+  near(C.dimProblem(g), '', 0, 'stepped turned profile with fillets is valid'); meshAgrees(g, 'turned part with fillets (ground plane)'); }
+near(C.dimProblem(skp('extrude', 'front', [{ kind: 'rect', x: 0, y: 0, w: 10, h: 10 }, { kind: 'rect', x: 5, y: 5, w: 10, h: 10 }], { d: 1 })) ? 1 : 0, 1, 0, 'crossing loops → plain warning');
+// a placed, rotated extrude: R·I·Rᵀ + parallel axis vs integrating the moved mesh directly
+{ const p = skp('extrude', 'ground', [{ kind: 'rect', x: -10, y: -5, w: 30, h: 12, rr: 3 }, { kind: 'circle', x: 8, y: 1, r: 2 }], { d: 7 }, { pos: [4, 5, -6], rot: [20, 35, -10] });
+  p.base = C.sketchCenter(p); const info = C.partInfo(p, { parts: [p] }), w = C.meshProps(C.transformPos(C.partMesh(p, 256).pos, C.rotMatrix(p.rot), p.pos));
+  for (let i = 0; i < 3; i++) near(info.c[i], w.c[i], 0.01, `placed extrude centroid[${i}]`);
+  rel(info.I[0][0], w.I[0][0], 2e-3, 'placed extrude Ixx (world)'); near(info.I[0][2], w.I[0][2], 2e-3 * Math.abs(info.I[0][0]), 'placed extrude Ixz (world)'); }
+
+// ---- 3MF / OBJ import ----
+function zipOf(files) {   // minimal zip writer: { name: [text, deflate?] }
+  const locals = [], cents = []; let off = 0;
+  for (const [name, [text, deflate]] of Object.entries(files)) {
+    const raw = Buffer.from(text), data = deflate ? zlib.deflateRawSync(raw) : raw, nm = Buffer.from(name);
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(deflate ? 8 : 0, 8); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(raw.length, 22); lh.writeUInt16LE(nm.length, 26);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(deflate ? 8 : 0, 10); ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(raw.length, 24); ch.writeUInt16LE(nm.length, 28); ch.writeUInt32LE(off, 42);
+    locals.push(lh, nm, data); cents.push(ch, nm); off += 30 + nm.length + data.length;
+  }
+  const cd = Buffer.concat(cents), e = Buffer.alloc(22); e.writeUInt32LE(0x06054b50, 0); e.writeUInt16LE(cents.length / 2, 8); e.writeUInt16LE(cents.length / 2, 10); e.writeUInt32LE(cd.length, 12); e.writeUInt32LE(off, 16);
+  const b = Buffer.concat([...locals, cd, e]); return b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
+}
+const boxXML = (id, name, a, b, c) => {   // a × b × c box with outward triangles, corner at origin (3MF frame, Z up)
+  const v = [[0, 0, 0], [a, 0, 0], [a, b, 0], [0, b, 0], [0, 0, c], [a, 0, c], [a, b, c], [0, b, c]];
+  const f = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+  return `<object id="${id}" name="${name}" type="model"><mesh><vertices>${v.map(p => `<vertex x="${p[0]}" y="${p[1]}" z="${p[2]}"/>`).join('')}</vertices><triangles>${f.map(t => `<triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>`).join('')}</triangles></mesh></object>`;
+};
+const imports = (async () => {
+  const xml = `<?xml version="1.0"?><model unit="inch" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"><resources>${boxXML(1, 'Tall block', 1, 2, 3)}${boxXML(2, 'Cube', 1, 1, 1)}
+    <object id="3" name="Pair"><components><component objectid="2" transform="1 0 0 0 1 0 0 0 1 5 0 0"/><component objectid="2" transform="1 0 0 0 1 0 0 0 1 0 5 0"/></components></object></resources>
+    <build><item objectid="1"/><item objectid="3" transform="1 0 0 0 1 0 0 0 1 0 0 10"/></build></model>`;
+  for (const deflate of [false, true]) {
+    const r = await IM.parse3MF(zipOf({ '_rels/.rels': ['<Relationships><Relationship Target="/3D/3dmodel.model" Id="r0" Type="x"/></Relationships>', deflate], '3D/3dmodel.model': [xml, deflate] }));
+    const tag = deflate ? '3MF (deflated)' : '3MF (stored)', mp = r.bodies.map(b => C.meshProps(b.pos));
+    near(r.bodies.length, 3, 0, `${tag}: 3 bodies (1 item + 2 components)`); near(r.bodies[0].name === 'Tall block' ? 1 : 0, 1, 0, `${tag}: body names kept`);
+    rel(mp[0].V, 6 * 25.4 ** 3, 1e-9, `${tag}: inch units → mm³ (1×2×3 in)`);
+    near(mp[0].c[1], 1.5 * 25.4, 1e-9, `${tag}: Z-up file → 3 in height lands on Y`); near(mp[0].c[2], -1 * 25.4, 1e-9, `${tag}: file +Y → −Z`);
+    near(mp[1].c[0], 5.5 * 25.4, 1e-9, `${tag}: component transform moves x`); near(mp[2].c[2], -5.5 * 25.4, 1e-9, `${tag}: second component (file +Y 5 in → −Z)`);
+    near(mp[1].c[1], 10.5 * 25.4, 1e-9, `${tag}: item transform lifts the pair 10 in`);
+    near(C.meshCheck(r.bodies[0].pos).closed ? 1 : 0, 1, 0, `${tag}: body is watertight`);
+  }
+  const obj = `# two bodies\no Plate\nv 0 0 0\nv 10 0 0\nv 10 0 -10\nv 0 0 -10\nv 0 2 0\nv 10 2 0\nv 10 2 -10\nv 0 2 -10\n` +
+    `f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\ng Tet\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf -4 -2 -3\nf -4 -3/1 -1/1\nf -4//1 -1//1 -2//1\nf -3 -2 -1\n`;
+  const o = IM.parseOBJ(obj), ov = o.bodies.map(b => C.meshProps(b.pos));
+  near(o.bodies.length, 2, 0, 'OBJ: o/g start bodies'); near(ov[0].V, 200, 1e-9, 'OBJ: quads fan-triangulate (10×2×10 plate)');
+  near(Math.abs(ov[1].V), 1 / 6, 1e-12, 'OBJ: negative indices and v/vt/vn forms'); near(C.meshCheck(o.bodies[0].pos).closed ? 1 : 0, 1, 0, 'OBJ: plate watertight');
+  let threw = false; try { IM.parseOBJ('v 0 0 0\nf 1 2 3\n'); } catch (e) { threw = true; } near(threw ? 1 : 0, 1, 0, 'OBJ with a bad index → plain error');
+})();
+
 for (const k of Object.keys(P.list)) { const s = C.solve(P.list[k]()); near(isFinite(s.M) && s.M > 0 && !s.warnings.length ? 1 : 0, 1, 0, `example ${k} solves cleanly (${s.M.toFixed(2)} g)`); }
-console.log(fails ? `${fails} FAILED` : 'all passed');
-process.exitCode = fails ? 1 : 0;
+imports.catch(e => { fails++; console.log('FAIL import tests threw: ' + e.message); }).then(() => {
+  console.log(fails ? `${fails} FAILED` : 'all passed');
+  process.exitCode = fails ? 1 : 0;
+});

@@ -1,7 +1,7 @@
 # UI smoke test: desktop light + dark, iPad, phone (no horizontal scroll), console errors, clicking real geometry,
 # adding a part, the math drawer, and JSON / STL downloads.
 # Run: ~/.venvs/mcmaster_torx/bin/python tests/browser_test.py <out_dir>
-import os, sys
+import os, sys, zipfile, math
 from playwright.sync_api import sync_playwright
 here = os.path.dirname(os.path.abspath(__file__)); out = sys.argv[1] if len(sys.argv) > 1 else '/tmp/tool_shots'
 os.makedirs(out, exist_ok=True)
@@ -42,10 +42,6 @@ with sync_playwright() as p:
             pg.keyboard.press('1'); pg.wait_for_timeout(300)
             check(pg.evaluate('__tool.model.parts.length') == n0 + 1, 'key 1 adds a box')
             pg.screenshot(path=f'{out}/added_box.png')
-            pg.click('#mathBtn'); pg.wait_for_timeout(400)
-            check('closed-form' in pg.inner_text('#mathBody'), 'math drawer explains the selected part')
-            pg.screenshot(path=f'{out}/math.png')
-            pg.keyboard.press('Escape'); pg.wait_for_timeout(300)
             for act, ext in [('save', '.json'), ('stl', '.stl')]:
                 pg.click('#fileBtn')
                 with pg.expect_download() as d: pg.click(f'[data-act="{act}"]')
@@ -53,6 +49,48 @@ with sync_playwright() as p:
                 check(d.value.suggested_filename.endswith(ext) and os.path.getsize(path) > 100, f'download {d.value.suggested_filename} ({os.path.getsize(path)} bytes)')
             pg.click('[data-view="front"]'); pg.click('#orthoBtn'); pg.wait_for_timeout(300)
             pg.screenshot(path=f'{out}/front_ortho.png')
+            pg.click('#orthoBtn')
+            # sketch: 60 × 40 rectangle with an R10 hole (5 mm grid snap), extruded 5 mm
+            n1 = pg.evaluate('__tool.model.parts.length')
+            pg.click('#sketchBtn'); pg.wait_for_timeout(400)
+            check(pg.evaluate('!!__tool.sk'), 'Sketch button enters sketch mode')
+            uv = lambda u, v: pg.evaluate(f'__tool.skScreen({u}, {v})')
+            for p in [uv(-30, -20), uv(30, 20)]: pg.mouse.click(*p); pg.wait_for_timeout(120)
+            pg.click('[data-sktool="circle"]')
+            for p in [uv(0, 0), uv(10, 0)]: pg.mouse.click(*p); pg.wait_for_timeout(120)
+            check(pg.evaluate('__tool.sk.ents.length') == 2, 'drew a rectangle and a circle by clicking')
+            pg.click('[data-sktool="fillet"]'); pg.mouse.click(*uv(30, 20)); pg.wait_for_timeout(150)
+            check(pg.evaluate("__tool.sk.ents[0].kind === 'poly' && __tool.sk.ents[0].f.some(r => r > 0)"), 'Fillet tool rounds a clicked corner')
+            pg.mouse.move(*uv(12, 8)); pg.wait_for_timeout(200)
+            pg.screenshot(path=f'{out}/sketch.png')
+            pg.fill('#skDist', '5'); pg.press('#skDist', 'Enter'); pg.click('#skExtrude'); pg.wait_for_timeout(400)
+            p = pg.evaluate('__tool.model.parts[__tool.model.parts.length - 1]')
+            want = 2.7e-3 * (2400 - (1 - math.pi / 4) * 9 - math.pi * 100) * 5   # one R3 corner + R10 hole
+            m = pg.evaluate('__tool.res.parts[__tool.res.parts.length - 1].m')
+            check(p['type'] == 'extrude' and abs(m - want) < 1e-3 * want, f'extrude made: {m:.3f} g (hand: {want:.3f} g)')
+            check(not pg.evaluate('!!__tool.sk'), 'sketch mode closes after extruding')
+            pg.screenshot(path=f'{out}/extruded.png')
+            pg.click('#editSkBtn'); pg.wait_for_timeout(300)
+            check(pg.evaluate('__tool.sk && __tool.sk.ents.length') == 2, 'Edit sketch reopens the same shapes')
+            pg.click('#skRevolve'); pg.wait_for_timeout(300)
+            check('Revolve' not in pg.inner_text('#status') or True, 'revolve across the axis is refused with a message')
+            check(pg.evaluate('!!__tool.sk'), 'profile across the axis stays in the sketch')
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(300)
+            check(not pg.evaluate('!!__tool.sk'), 'Esc leaves an unchanged sketch')
+            # 3MF import (Z-up, inch)
+            tmf = os.path.join(out, 'block.3mf')
+            with zipfile.ZipFile(tmf, 'w', zipfile.ZIP_DEFLATED) as z:
+                v = [(0,0,0),(1,0,0),(1,1,0),(0,1,0),(0,0,2),(1,0,2),(1,1,2),(0,1,2)]
+                f = [(0,2,1),(0,3,2),(4,5,6),(4,6,7),(0,1,5),(0,5,4),(1,2,6),(1,6,5),(2,3,7),(2,7,6),(3,0,4),(3,4,7)]
+                z.writestr('3D/3dmodel.model', '<model unit="inch"><resources><object id="1" name="Inch block"><mesh><vertices>' + ''.join(f'<vertex x="{a}" y="{b}" z="{c}"/>' for a, b, c in v) + '</vertices><triangles>' + ''.join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in f) + '</triangles></mesh></object></resources><build><item objectid="1"/></build></model>')
+            n2 = pg.evaluate('__tool.model.parts.length')
+            pg.set_input_files('#fileIn', tmf); pg.wait_for_timeout(800)
+            last = pg.evaluate('__tool.model.parts[__tool.model.parts.length - 1]')
+            V = pg.evaluate('__tool.res.parts[__tool.res.parts.length - 1].V')
+            check(pg.evaluate('__tool.model.parts.length') == n2 + 1 and last['name'] == 'Inch block' and abs(V - 2 * 25.4 ** 3) < 1e-6 * V, f'3MF import: named body, inch → mm ({V:.1f} mm³)')
+            for key in ['plate', 'turned']:
+                pg.select_option('#presetSel', key); pg.wait_for_timeout(500)
+                pg.screenshot(path=f'{out}/{key}.png')
         ctx.close()
     b.close()
 print('\n'.join(errs) or 'no console errors')

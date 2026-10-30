@@ -15,19 +15,23 @@ const Core = (() => {
     cone:     { label: 'Cone',     dims: [['r1', 'Bottom radius', 15], ['r2', 'Top radius', 0], ['h', 'Height', 30]] },
     torus:    { label: 'Torus',    dims: [['R', 'Ring radius', 20], ['r', 'Tube radius', 5]] },
     mesh:     { label: 'Mesh',     dims: [] },
+    extrude:  { label: 'Extrude',  dims: [['d', 'Distance', 10]] },
+    revolve:  { label: 'Revolve',  dims: [['angle', 'Angle', 360, '°']] },
   };
   function defaultDims(type) { const o = {}; for (const [k, , v] of TYPES[type].dims) o[k] = v; return o; }
 
   // Plain-language problems with a part's dimensions ('' when fine).
   function dimProblem(p) {
     const d = p.dims || {};
-    for (const [k, label] of TYPES[p.type].dims) if (!(d[k] >= 0) || !isFinite(d[k])) return `${label} must be a number ≥ 0`;
+    for (const [k, label] of TYPES[p.type].dims) if (typeof d[k] !== 'number' || !isFinite(d[k])) return `${label} must be a number`;
     switch (p.type) {
+      case 'extrude': return d.d !== 0 ? sketchProblem(p) : 'Extrude distance must not be 0';
+      case 'revolve': return d.angle > 0 && d.angle <= 360 ? sketchProblem(p) : 'Revolve angle must be between 0 and 360°';
       case 'box': return d.w > 0 && d.h > 0 && d.d > 0 ? '' : 'Box sides must be > 0';
       case 'cylinder': return d.r > 0 && d.h > 0 ? '' : 'Radius and height must be > 0';
-      case 'tube': return d.h > 0 && d.ro > d.ri ? '' : 'Outer radius must exceed inner radius';
+      case 'tube': return d.h > 0 && d.ri >= 0 && d.ro > d.ri ? '' : 'Outer radius must exceed inner radius';
       case 'sphere': return d.r > 0 ? '' : 'Radius must be > 0';
-      case 'cone': return d.h > 0 && (d.r1 > 0 || d.r2 > 0) ? '' : 'Height and at least one radius must be > 0';
+      case 'cone': return d.h > 0 && d.r1 >= 0 && d.r2 >= 0 && (d.r1 > 0 || d.r2 > 0) ? '' : 'Height and at least one radius must be > 0';
       case 'torus': return d.r > 0 && d.R > d.r ? '' : 'Ring radius must exceed tube radius';
     }
     return '';
@@ -73,6 +77,7 @@ const Core = (() => {
         const Ix = Ib - V * sy * sy;                                     // parallel axis to the centroid
         return { V, A: PI * (r1 + r2) * Math.hypot(r1 - r2, h) + PI * r1 * r1 + PI * r2 * r2, c: [0, sy - h / 2, 0], I: diag(Ix, Iy, Ix) };
       }
+      case 'extrude': case 'revolve': return sketchProps(p);
       case 'torus': {
         const V = 2 * PI * PI * d.R * d.r ** 2;
         return { V, A: 4 * PI * PI * d.R * d.r, c: [0, 0, 0],
@@ -95,30 +100,39 @@ const Core = (() => {
     quad([x, -y, -z], [-x, -y, -z], [-x, y, -z], [x, y, -z], [0, 0, -1]);
     return { pos, nrm };
   }
-  // Revolve a closed profile of {r, y, n?} points about Y. A point with `n` ([nr, ny]) is on a smooth curve and uses
-  // that normal; elsewhere each profile edge is a sharp facet with its own normal. Points on the axis (r = 0) close
-  // the profile without needing a facet there.
-  function lathe(prof, seg) {
-    let area2 = 0;
-    for (let i = 0; i < prof.length; i++) { const a = prof[i], b = prof[(i + 1) % prof.length]; area2 += a.r * b.y - b.r * a.y; }
-    const sgn = area2 >= 0 ? 1 : -1, pos = [], nrm = [];
-    const cs = Array.from({ length: seg + 1 }, (_, k) => [Math.cos(2 * PI * k / seg), Math.sin(2 * PI * k / seg)]);
+  // Revolve a closed profile of {r, y, n?, smooth?} points about Y, from angle phi0 through theta (radians). A point
+  // with `n` ([nr, ny]) uses that normal; a `smooth` point averages its two edge normals; elsewhere each profile edge
+  // is a sharp facet. Edges on the axis (r = 0) close the profile without a facet. Surfaces face out of the loop's own
+  // interior; pass hole = true for a hole loop, whose surface must face into the hole instead.
+  function lathe(prof, seg, phi0 = 0, theta = 2 * PI, hole = false) {
+    const L = loopNormals(prof.map(p => [p.r, p.y]), prof.map(p => !!p.smooth), hole), sgn = L.sgn, pos = [], nrm = [];
+    const n = Math.max(1, Math.ceil(seg * theta / (2 * PI) - 1e-9));
+    const cs = Array.from({ length: n + 1 }, (_, k) => { const t = phi0 + theta * k / n; return [Math.cos(t), Math.sin(t)]; });
     for (let i = 0; i < prof.length; i++) {
       const a = prof[i], b = prof[(i + 1) % prof.length];
       if (a.r === 0 && b.r === 0) continue;
-      const dr = b.r - a.r, dy = b.y - a.y, L = Math.hypot(dr, dy) || 1, ne = [sgn * dy / L, -sgn * dr / L];
-      const na = a.n && b.n ? a.n : ne, nb = a.n && b.n ? b.n : ne;
-      for (let k = 0; k < seg; k++) {
-        const P = (p, c) => [p.r * c[0], p.y, -p.r * c[1]], N = (n, c) => [n[0] * c[0], n[1], -n[0] * c[1]];
-        const v = [P(a, cs[k]), P(b, cs[k]), P(b, cs[k + 1]), P(a, cs[k + 1])], n = [N(na, cs[k]), N(nb, cs[k]), N(nb, cs[k + 1]), N(na, cs[k + 1])];
+      const na = a.n && b.n ? a.n : L.start[i], nb = a.n && b.n ? b.n : L.end[i];
+      for (let k = 0; k < n; k++) {
+        const P = (p, c) => [p.r * c[0], p.y, -p.r * c[1]], N = (q, c) => [q[0] * c[0], q[1], -q[0] * c[1]];
+        const v = [P(a, cs[k]), P(b, cs[k]), P(b, cs[k + 1]), P(a, cs[k + 1])], nn = [N(na, cs[k]), N(nb, cs[k]), N(nb, cs[k + 1]), N(na, cs[k + 1])];
         for (const t of [[0, 1, 2], [0, 2, 3]]) {
           if (triArea(v[t[0]], v[t[1]], v[t[2]]) < 1e-12) continue;
           const o = sgn > 0 ? [t[0], t[2], t[1]] : t;
-          for (const j of o) { pos.push(...v[j]); nrm.push(...n[j]); }
+          for (const j of o) { pos.push(...v[j]); nrm.push(...nn[j]); }
         }
       }
     }
     return { pos, nrm };
+  }
+  // Per-edge normals of a closed 2D loop, pointing out of the loop's interior (into it for a hole loop); smooth
+  // vertices share an averaged normal.
+  function loopNormals(pts, smooth, hole) {
+    const m = pts.length; let a2 = 0;
+    for (let i = 0; i < m; i++) { const p = pts[i], q = pts[(i + 1) % m]; a2 += p[0] * q[1] - q[0] * p[1]; }
+    const sgn = (a2 >= 0 ? 1 : -1) * (hole ? -1 : 1);
+    const e = pts.map((p, i) => { const q = pts[(i + 1) % m], dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1; return [sgn * dy / l, -sgn * dx / l]; });
+    const vn = pts.map((_, i) => { const a = e[(i - 1 + m) % m], b = e[i], x = a[0] + b[0], y = a[1] + b[1], l = Math.hypot(x, y) || 1; return [x / l, y / l]; });
+    return { sgn, start: e.map((n, i) => smooth[i] ? vn[i] : n), end: e.map((n, i) => smooth[(i + 1) % m] ? vn[(i + 1) % m] : n) };
   }
   function triArea(a, b, c) { return 0.5 * norm(cross(sub(b, a), sub(c, a))); }
   function arc(cx, cy, rad, t0, t1, n) {   // smooth profile points on a circle, angle t measured from +r toward +y
@@ -134,6 +148,7 @@ const Core = (() => {
       case 'sphere': { const s = arc(0, 0, d.r, -PI / 2, PI / 2, Math.max(4, seg / 2)); s[0].r = 0; s[s.length - 1].r = 0; return lathe(s, seg); }
       case 'torus': return lathe(arc(d.R, 0, d.r, 0, 2 * PI, seg).slice(0, -1), seg);
       case 'mesh': { const m = meshes && meshes[p.mesh]; return m ? { pos: m.pos, nrm: null } : { pos: [], nrm: null }; }
+      case 'extrude': case 'revolve': return sketchMesh(p, seg);
     }
     return { pos: [], nrm: [] };
   }
@@ -228,6 +243,252 @@ const Core = (() => {
     const idx = [0, 1, 2].sort((i, j) => A[i][i] - A[j][j]);
     return { values: idx.map(i => A[i][i]), vectors: idx.map(i => [V[0][i], V[1][i], V[2][i]]) };
   }
+
+
+  // ---------- sketches: profiles of lines, rectangles, circles and fillets ----------
+  // A sketch lives on a plane with its own (u, v) axes and normal w. P maps sketch (u, v, w) to world; every P is a
+  // proper rotation, so windings and handedness carry over. The plane sits at w = offset.
+  const PLANES = {
+    ground: { label: 'Ground (X–Z)', P: [[1, 0, 0], [0, 0, 1], [0, -1, 0]] },   // u → +X, v → −Z, w → +Y
+    front:  { label: 'Front (X–Y)',  P: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] },    // u → +X, v → +Y, w → +Z
+    right:  { label: 'Right (Z–Y)',  P: [[0, 0, 1], [0, 1, 0], [-1, 0, 0]] },   // u → −Z, v → +Y, w → +X
+  };
+  const EXACT_N = 4096;   // chords per full turn when integrating curved edges (relative error ≈ (2π/N)²/6 ≈ 4e-7)
+
+  // Round the corners of a closed polygon. radii[i] is the fillet radius at vertex i (0 = sharp). Returns
+  // { pts, smooth } with each arc sampled at nTurn points per full turn, or { problem }.
+  function filletPolygon(pts, radii, nTurn) {
+    const m = pts.length, out = [], smooth = [], cut = new Array(m).fill(0), geo = [];
+    for (let i = 0; i < m; i++) {
+      const r = +(radii && radii[i]) || 0, B = pts[i];
+      if (r <= 0) { geo.push(null); continue; }
+      const A = pts[(i - 1 + m) % m], C = pts[(i + 1) % m];
+      const a = [A[0] - B[0], A[1] - B[1]], c = [C[0] - B[0], C[1] - B[1]], la = Math.hypot(...a), lc = Math.hypot(...c);
+      if (!la || !lc) return { problem: 'A corner has a zero-length side' };
+      const ua = [a[0] / la, a[1] / la], uc = [c[0] / lc, c[1] / lc], cosT = Math.max(-1, Math.min(1, ua[0] * uc[0] + ua[1] * uc[1])), th = Math.acos(cosT);
+      if (th < 1e-6 || PI - th < 1e-6) { geo.push(null); continue; }     // straight-through vertex: nothing to round
+      const t = r / Math.tan(th / 2), bis = [ua[0] + uc[0], ua[1] + uc[1]], lb = Math.hypot(...bis);
+      const ctr = [B[0] + bis[0] / lb * r / Math.sin(th / 2), B[1] + bis[1] / lb * r / Math.sin(th / 2)];
+      const T1 = [B[0] + ua[0] * t, B[1] + ua[1] * t], T2 = [B[0] + uc[0] * t, B[1] + uc[1] * t];
+      cut[i] = t; geo.push({ T1, T2, ctr, r });
+    }
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % m, L = Math.hypot(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]);
+      if (cut[i] + cut[j] > L * (1 + 1e-9)) return { problem: 'A fillet radius is too large for the sides next to it' };
+    }
+    for (let i = 0; i < m; i++) {
+      const g = geo[i];
+      if (!g) { out.push(pts[i]); smooth.push(false); continue; }
+      let a0 = Math.atan2(g.T1[1] - g.ctr[1], g.T1[0] - g.ctr[0]), a1 = Math.atan2(g.T2[1] - g.ctr[1], g.T2[0] - g.ctr[0]), da = a1 - a0;
+      while (da > PI) da -= 2 * PI; while (da < -PI) da += 2 * PI;
+      const k = Math.max(2, Math.ceil(Math.abs(da) / (2 * PI) * nTurn));
+      for (let s = 0; s <= k; s++) { const t = a0 + da * s / k; out.push([g.ctr[0] + g.r * Math.cos(t), g.ctr[1] + g.r * Math.sin(t)]); smooth.push(true); }
+    }
+    // a fillet that uses up a whole side leaves its end exactly on the next one's start: keep one point
+    const P = [], S = [];
+    out.forEach((q, i) => { const last = P[P.length - 1]; if (last && Math.hypot(q[0] - last[0], q[1] - last[1]) < 1e-9) { S[S.length - 1] = S[S.length - 1] || smooth[i]; return; } P.push(q); S.push(smooth[i]); });
+    if (P.length > 1 && Math.hypot(P[0][0] - P[P.length - 1][0], P[0][1] - P[P.length - 1][1]) < 1e-9) { S[0] = S[0] || S[S.length - 1]; P.pop(); S.pop(); }
+    return { pts: P, smooth: S };
+  }
+  // One sketch entity → one closed loop.
+  function entLoop(e, nTurn) {
+    if (e.kind === 'circle') {
+      if (!(e.r > 0)) return { problem: 'Circle radius must be > 0' };
+      const n = Math.max(8, nTurn);
+      return { pts: Array.from({ length: n }, (_, i) => [e.x + e.r * Math.cos(2 * PI * i / n), e.y + e.r * Math.sin(2 * PI * i / n)]), smooth: new Array(n).fill(true), perim: 2 * PI * e.r };
+    }
+    let pts, radii;
+    if (e.kind === 'rect') {
+      if (!e.w || !e.h) return { problem: 'Rectangle sides must not be 0' };
+      const x0 = Math.min(e.x, e.x + e.w), x1 = Math.max(e.x, e.x + e.w), y0 = Math.min(e.y, e.y + e.h), y1 = Math.max(e.y, e.y + e.h);
+      pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]; radii = new Array(4).fill(Math.max(0, +e.rr || 0));
+    } else {
+      pts = e.pts || []; radii = e.f || [];
+      if (pts.length < 3) return { problem: 'A line loop needs at least 3 points' };
+    }
+    const f = filletPolygon(pts, radii, nTurn);
+    if (f.problem) return f;
+    let perim = 0;   // exact perimeter: straight runs plus true arc lengths
+    { const g = filletPolygon(pts, radii, EXACT_N * 4); for (let i = 0; i < g.pts.length; i++) { const p = g.pts[i], q = g.pts[(i + 1) % g.pts.length]; perim += Math.hypot(q[0] - p[0], q[1] - p[1]); } }
+    return { pts: f.pts, smooth: f.smooth, perim };
+  }
+  function signedArea(pts) { let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p[0] * q[1] - q[0] * p[1]; } return a / 2; }
+  function inside(pt, pts) {
+    let c = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[i], b = pts[j];
+      if ((a[1] > pt[1]) !== (b[1] > pt[1]) && pt[0] < (b[0] - a[0]) * (pt[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+    }
+    return c;
+  }
+  function segsCross(p, q, r, s) {
+    const d = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const d1 = d(r, s, p), d2 = d(r, s, q), d3 = d(p, q, r), d4 = d(p, q, s), eps = 1e-12;
+    return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+  }
+  // All loops of a sketch with nesting depth (even depth = material, odd = hole), or { problem }.
+  function sketchLoops(sk, nTurn) {
+    const ents = (sk && sk.ents) || [];
+    if (!ents.length) return { problem: 'The sketch is empty' };
+    const loops = [];
+    for (const e of ents) { const l = entLoop(e, nTurn); if (l.problem) return l; if (Math.abs(signedArea(l.pts)) < 1e-12) return { problem: 'A loop has no area' }; loops.push(l); }
+    const segs = loops.map(l => l.pts.map((p, i) => [p, l.pts[(i + 1) % l.pts.length]]));
+    const total = segs.reduce((a, s) => a + s.length, 0);
+    if (total <= 6000) {
+      for (let a = 0; a < segs.length; a++) for (let b = a; b < segs.length; b++)
+        for (let i = 0; i < segs[a].length; i++) for (let j = (a === b ? i + 2 : 0); j < segs[b].length; j++) {
+          if (a === b && i === 0 && j === segs[a].length - 1) continue;
+          if (segsCross(segs[a][i][0], segs[a][i][1], segs[b][j][0], segs[b][j][1])) return { problem: a === b ? 'A loop crosses itself' : 'Two loops cross; keep each loop inside or outside the others' };
+        }
+    }
+    loops.forEach((l, i) => { l.depth = loops.filter((o, j) => j !== i && Math.abs(signedArea(o.pts)) > Math.abs(signedArea(l.pts)) && inside(l.pts[0], o.pts)).length; });
+    return { loops };
+  }
+  function sketchProblem(p) { const r = sketchLoops(p.sketch, 32); if (r.problem) return r.problem; if (p.type === 'revolve') return revolveFrame(p, r.loops).problem || ''; return ''; }
+
+  // Region integral of u^a·v^b over the material, by Green's theorem: ∬ u^a v^b dA = ∮ u^(a+1) v^b/(a+1) dv.
+  // Each straight edge is integrated exactly with 3-point Gauss–Legendre (integrands here are degree ≤ 5).
+  function regionMoment(loops, a, b) {
+    const x = Math.sqrt(3 / 5), gt = [(1 - x) / 2, 0.5, (1 + x) / 2], gw = [5 / 18, 8 / 18, 5 / 18];
+    let total = 0;
+    for (const l of loops) {
+      let g = 0; const P = l.pts, m = P.length;
+      for (let i = 0; i < m; i++) {
+        const p = P[i], q = P[(i + 1) % m], du = q[0] - p[0], dv = q[1] - p[1];
+        if (!dv) continue;
+        for (let k = 0; k < 3; k++) { const u = p[0] + gt[k] * du, v = p[1] + gt[k] * dv; g += gw[k] * u ** (a + 1) * v ** b / (a + 1) * dv; }
+      }
+      total += (l.depth % 2 ? -1 : 1) * Math.sign(signedArea(P)) * g;
+    }
+    return total;
+  }
+  // Inertia about the centroid from volume and second moments about the origin (all per unit density).
+  function inertiaFrom(V, c, S) {
+    const [x, y, z] = c;
+    return [[S.yy + S.zz - V * (y * y + z * z), -(S.xy - V * x * y), -(S.xz - V * x * z)],
+            [-(S.xy - V * x * y), S.xx + S.zz - V * (x * x + z * z), -(S.yz - V * y * z)],
+            [-(S.xz - V * x * z), -(S.yz - V * y * z), S.xx + S.yy - V * (x * x + y * y)]];
+  }
+  // Revolve axis: 'v' turns the profile about the sketch's v axis (radius = u), 'u' about its u axis (radius = v).
+  // A profile entirely on the negative side is turned from 180° so the solid lands where it was drawn.
+  function revolveFrame(p, loops) {
+    const ax = p.axis === 'u' ? 'u' : 'v', ri = ax === 'v' ? 0 : 1;
+    let lo = Infinity, hi = -Infinity;
+    for (const l of loops) for (const q of l.pts) { lo = Math.min(lo, q[ri]); hi = Math.max(hi, q[ri]); }
+    if (lo < -1e-9 && hi > 1e-9) return { problem: `The profile crosses the revolve axis (${ax === 'v' ? 'V' : 'U'}); keep it on one side` };
+    const flip = hi <= 1e-9 ? -1 : 1;
+    // axis frame (x, y, z) = (r cosφ, a, −r sinφ) → sketch frame
+    const M = ax === 'v' ? [[1, 0, 0], [0, 1, 0], [0, 0, 1]] : [[0, 1, 0], [1, 0, 0], [0, 0, -1]];
+    const toRA = l => ({ pts: l.pts.map(q => [flip * q[ri], q[1 - ri]]), smooth: l.smooth, depth: l.depth, perim: l.perim });
+    return { M, flip, phi0: flip < 0 ? PI : 0, toRA };
+  }
+  function planeOf(sk) { return PLANES[sk.plane] || PLANES.ground; }
+
+  // Exact properties of an extrude or revolve, in the part's local frame (sketch geometry minus p.base).
+  function sketchProps(p) {
+    const L = sketchLoops(p.sketch, EXACT_N); if (L.problem) return null;
+    const P = planeOf(p.sketch).P, off = +p.sketch.offset || 0, base = p.base || [0, 0, 0];
+    let V, A, cS, IS, T, shiftW;
+    if (p.type === 'extrude') {
+      const loops = L.loops, d = p.dims.d, w0 = off + Math.min(0, d), w1 = off + Math.max(0, d), h = w1 - w0;
+      const Ar = regionMoment(loops, 0, 0), Su = regionMoment(loops, 1, 0), Sv = regionMoment(loops, 0, 1);
+      const Suu = regionMoment(loops, 2, 0), Svv = regionMoment(loops, 0, 2), Suv = regionMoment(loops, 1, 1);
+      V = Ar * h; A = 2 * Ar + loops.reduce((s, l) => s + l.perim, 0) * h;
+      cS = [Su / Ar, Sv / Ar, (w0 + w1) / 2];
+      const W2 = (w1 * w1 - w0 * w0) / 2;
+      IS = inertiaFrom(V, cS, { xx: Suu * h, yy: Svv * h, zz: Ar * (w1 ** 3 - w0 ** 3) / 3, xy: Suv * h, xz: Su * W2, yz: Sv * W2 });
+      T = P; shiftW = [0, 0, 0];
+    } else {
+      const F = revolveFrame(p, L.loops); if (F.problem) return null;
+      const loops = L.loops.map(F.toRA), th = p.dims.angle * PI / 180, f0 = F.phi0, f1 = f0 + th;
+      const R1 = regionMoment(loops, 1, 0), R2 = regionMoment(loops, 2, 0), R3 = regionMoment(loops, 3, 0);
+      const RY = regionMoment(loops, 1, 1), RY2 = regionMoment(loops, 1, 2), R2Y = regionMoment(loops, 2, 1), Ar = regionMoment(loops, 0, 0);
+      const C = Math.sin(f1) - Math.sin(f0), S = Math.cos(f0) - Math.cos(f1);          // ∫cosφ, ∫sinφ
+      const CC = th / 2 + (Math.sin(2 * f1) - Math.sin(2 * f0)) / 4, SS = th / 2 - (Math.sin(2 * f1) - Math.sin(2 * f0)) / 4, SC = (Math.sin(f1) ** 2 - Math.sin(f0) ** 2) / 2;
+      V = th * R1;   // Pappus
+      // lateral area by Pappus on the boundary (∫ r ds; edges on the axis add nothing), plus the two caps of a partial turn
+      let rds = 0;
+      for (const l of loops) { const g = l.perim / loopLen(l.pts); for (let i = 0; i < l.pts.length; i++) { const a = l.pts[i], b = l.pts[(i + 1) % l.pts.length]; rds += g * Math.hypot(b[0] - a[0], b[1] - a[1]) * (a[0] + b[0]) / 2; } }
+      A = th * rds + (th < 2 * PI - 1e-12 ? 2 * Ar : 0);
+      cS = [C * R2 / V, RY / R1, -S * R2 / V];
+      IS = inertiaFrom(V, cS, { xx: R3 * CC, yy: th * RY2, zz: R3 * SS, xy: C * R2Y, yz: -S * R2Y, xz: -R3 * SC });
+      T = Core_mulMM(P, F.M); shiftW = [0, 0, off];
+    }
+    // sketch-frame → world: T·x (+ plane offset for revolves, already inside w for extrudes), then minus base
+    const cW = Core_mulMV(P, shiftW).map((v, i) => v + Core_mulMV(T, cS)[i] - base[i]);
+    return { V, A, c: cW, I: Core_mulMM(Core_mulMM(T, IS), Core_T(T)) };
+  }
+  function loopLen(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; s += Math.hypot(b[0] - a[0], b[1] - a[1]); } return s; }
+
+  // Mesh of an extrude or revolve (local frame). Caps need a polygon-with-holes triangulator, supplied by the app
+  // (three.js ShapeUtils) through setTriangulator: (contour, holes) → [[i, j, k], …] into contour.concat(...holes).
+  let triangulator = null;
+  function setTriangulator(fn) { triangulator = fn; }
+  function regions(loops) {
+    return loops.filter(l => l.depth % 2 === 0).map(o => ({ outer: o, holes: loops.filter(h => h.depth === o.depth + 1 && inside(h.pts[0], o.pts)) }));
+  }
+  function capTris(reg) {   // triangles of one region, counterclockwise in its own 2D frame
+    const all = reg.outer.pts.concat(...reg.holes.map(h => h.pts));
+    const tris = triangulator(reg.outer.pts, reg.holes.map(h => h.pts));
+    return tris.map(t => { const [a, b, c] = t.map(i => all[i]); return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) >= 0 ? [a, b, c] : [a, c, b]; });
+  }
+  function sketchMesh(p, seg) {
+    const L = sketchLoops(p.sketch, seg); if (L.problem || !triangulator) return { pos: [], nrm: [] };
+    const P = planeOf(p.sketch).P, off = +p.sketch.offset || 0, base = p.base || [0, 0, 0], pos = [], nrm = [];
+    let T, add;
+    if (p.type === 'extrude') {
+      const d = p.dims.d, w0 = off + Math.min(0, d), w1 = off + Math.max(0, d);
+      for (const reg of regions(L.loops)) for (const [a, b, c] of capTris(reg)) {
+        pos.push(a[0], a[1], w1, b[0], b[1], w1, c[0], c[1], w1); nrm.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+        pos.push(a[0], a[1], w0, c[0], c[1], w0, b[0], b[1], w0); nrm.push(0, 0, -1, 0, 0, -1, 0, 0, -1);
+      }
+      for (const l of L.loops) {
+        const N = loopNormals(l.pts, l.smooth, l.depth % 2 === 1), m = l.pts.length;
+        for (let i = 0; i < m; i++) {
+          const p0 = l.pts[i], q0 = l.pts[(i + 1) % m], ns = [...N.start[i], 0], ne = [...N.end[i], 0];
+          let v = [[p0[0], p0[1], w0], [q0[0], q0[1], w0], [q0[0], q0[1], w1], [p0[0], p0[1], w1]], nn = [ns, ne, ne, ns];
+          if (N.sgn < 0) { v = [v[1], v[0], v[3], v[2]]; nn = [ne, ns, ns, ne]; }    // keep the quad facing out of the loop
+          for (const t of [[0, 1, 2], [0, 2, 3]]) for (const j of t) { pos.push(...v[j]); nrm.push(...nn[j]); }
+        }
+      }
+      T = P; add = [0, 0, 0];
+    } else {
+      const F = revolveFrame(p, L.loops); if (F.problem) return { pos: [], nrm: [] };
+      const loops = L.loops.map(F.toRA), th = p.dims.angle * PI / 180;
+      for (const l of loops) {
+        const m = lathe(l.pts.map((q, i) => ({ r: Math.max(0, q[0]), y: q[1], smooth: l.smooth[i] })), seg, F.phi0, th, l.depth % 2 === 1);
+        for (let i = 0; i < m.pos.length; i++) { pos.push(m.pos[i]); nrm.push(m.nrm[i]); }
+      }
+      if (th < 2 * PI - 1e-12) {
+        const put = (q, f) => [q[0] * Math.cos(f), q[1], -q[0] * Math.sin(f)], f0 = F.phi0, f1 = f0 + th;
+        const n0 = [-Math.sin(f0), 0, -Math.cos(f0)].map(x => -x), n1 = [-Math.sin(f1), 0, -Math.cos(f1)];   // −sweep at start, +sweep at end
+        for (const reg of regions(loops)) for (const [a, b, c] of capTris(reg)) {
+          const s0 = [put(a, f0), put(b, f0), put(c, f0)], s1 = [put(a, f1), put(b, f1), put(c, f1)];
+          const face = (tri, want) => { const n = cross(sub(tri[1], tri[0]), sub(tri[2], tri[0])); return n[0] * want[0] + n[1] * want[1] + n[2] * want[2] >= 0 ? tri : [tri[0], tri[2], tri[1]]; };
+          for (const v of face(s0, n0)) { pos.push(...v); nrm.push(...n0); }
+          for (const v of face(s1, n1)) { pos.push(...v); nrm.push(...n1); }
+        }
+      }
+      T = Core_mulMM(P, F.M); add = Core_mulMV(P, [0, 0, off]);
+    }
+    const t = add.map((v, i) => v - base[i]), outP = transformPos(pos, T, t), outN = transformPos(nrm, T, [0, 0, 0]);
+    return { pos: outP, nrm: outN };
+  }
+  // Center of an extrude/revolve's sketch geometry in world terms (becomes p.base, so the part's origin sits there).
+  function sketchCenter(p, seg) {
+    const q = Object.assign({}, p, { base: [0, 0, 0] }), m = sketchMesh(q, seg || 32).pos;
+    if (!m.length) return [0, 0, 0];
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < m.length; i++) { const k = i % 3; lo[k] = Math.min(lo[k], m[i]); hi[k] = Math.max(hi[k], m[i]); }
+    return lo.map((v, k) => Math.round((v + hi[k]) / 2 * 1e6) / 1e6);
+  }
+  // Filled-profile triangles in sketch (u, v), for showing material vs holes while sketching; null if the sketch has a problem.
+  function sketchFill(sk, seg) {
+    const L = sketchLoops(sk, seg || 64); if (L.problem || !triangulator) return null;
+    const out = []; for (const reg of regions(L.loops)) for (const t of capTris(reg)) for (const q of t) out.push(q[0], q[1]);
+    return out;
+  }
+  const Core_mulMV = (M, v) => mulMV(M, v), Core_mulMM = (A, B) => mulMM(A, B), Core_T = A => T(A);
 
   // ---------- materials (density g/cm³, nominal handbook values) ----------
   const MATERIALS = [
@@ -330,7 +591,7 @@ const Core = (() => {
     return { pos: pos.map((v, i) => Math.round((v - c[i % 3]) * 1e5) / 1e5), center: c };
   }
 
-  return { TYPES, MATERIALS, MAT, defaultDims, dimProblem, exactProps, partMesh, meshProps, meshCheck, rotMatrix, transformPos, shift, eigSym,
+  return { TYPES, PLANES, MATERIALS, MAT, setTriangulator, sketchLoops, sketchFill, sketchCenter, entLoop, regionMoment, defaultDims, dimProblem, exactProps, partMesh, meshProps, meshCheck, rotMatrix, transformPos, shift, eigSym,
     mulMV, mulMM, T, density, partInfo, solve, worldTriangles, stlBinary, parseSTL, centerMesh, gauss3 };
 })();
 if (typeof module !== 'undefined') module.exports = Core;

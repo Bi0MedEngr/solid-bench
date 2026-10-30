@@ -2,7 +2,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <!--FONTS-->
 <style>
-/* Modeling bench: tool rail left, 3D viewport center, parts + inspector + mass properties right; the math opens in a drawer. */
+/* Modeling bench: tool rail left, 3D viewport center, parts + inspector + mass properties right; sketches get a toolbar over the view. */
 :root {
   --bg: #e8eaf0; --panel: #f7f8fb; --paper: #fdfdfe; --ink: #161827; --ink-2: #4a4e63; --ink-3: #7c8096;
   --line: #d6d9e4; --accent: #4338ca; --accent-soft: rgba(67, 56, 202, 0.1); --on-accent: #ffffff;
@@ -115,27 +115,23 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
 .note { color: var(--ink-2); font-size: 12.5px; }
 .note b { color: var(--ink); font-weight: 600; }
 
-/* math drawer */
-#scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.25); z-index: 40; }
-#math { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 41;
-  display: flex; flex-direction: column; transform: translateX(100%); transition: transform .2s ease; padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); }
-#math.open { transform: none; }
-#math header { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
-#math header h2 { margin: 0; font-size: 13px; }
-#math header .btn { margin-left: auto; }
-#mathBody { overflow-y: auto; padding: 6px 18px max(24px, env(safe-area-inset-bottom, 0px)); }
-#mathBody details { border-bottom: 1px solid var(--line); padding: 8px 0; }
-#mathBody summary { cursor: pointer; font: 600 15px var(--cond); padding: 4px 0; list-style: none; display: flex; align-items: center; gap: 8px; }
-#mathBody summary::-webkit-details-marker { display: none; }
-#mathBody summary::before { content: ''; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); transition: transform .15s; flex: none; }
-#mathBody details[open] summary::before { transform: rotate(45deg); }
-#mathBody p { color: var(--ink-2); margin: 6px 0; font-size: 13.5px; }
-#mathBody .eqs { font: 13px/1.7 var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0; overflow-x: auto; white-space: pre; }
-#mathBody .eqs .sub { color: var(--ink-3); }
-#mathBody .eqs .res { color: var(--accent); font-weight: 500; }
+.sketchbar { position: absolute; top: 46px; left: 8px; right: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--accent); border-radius: 10px; padding: 6px 8px; z-index: 5; }
+.sketchbar .btn { padding: 4px 8px; font-size: 12px; }
+.sktitle { font: 600 12px var(--cond); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-right: 2px; }
+.skseg { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.mini { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 7px; background: var(--paper); padding: 0 6px; }
+.mini input { width: 52px; border: 0; background: none; font: 12px var(--mono); padding: 4px 0; outline: none; }
+.mini em { font-style: normal; color: var(--ink-3); font-size: 11px; }
+.skfinish { display: grid; grid-template-columns: 1fr; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--paper); margin: 8px 0; }
+.skfinish .btn { justify-content: center; margin-bottom: 6px; }
+.skh { font: 600 11.5px var(--cond); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); margin: 12px 0 6px; }
+.skent { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 6px; }
+.skent.sel { border-color: var(--accent); }
+.skhead { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.skhead .btn { padding: 2px 7px; font-size: 11.5px; }
+.skent .xyz { width: 200px; }
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; max-width: calc(100vw - 32px); z-index: 50; font-size: 13px; }
 [hidden] { display: none !important; }
-@media (prefers-reduced-motion: reduce) { #math { transition: none; } }
 @media (max-width: 1100px) { .app { grid-template-columns: 52px minmax(0, 1fr) 290px; } .lbl { display: none; } }
 @media (max-width: 760px) {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 62vh auto; height: auto; }
@@ -155,7 +151,7 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
       <button class="btn" id="fileBtn" aria-haspopup="true"><svg viewBox="0 0 16 16"><path d="M3 2h6l4 4v8H3z"/><path d="M9 2v4h4"/></svg><span class="lbl">File</span></button>
       <div class="menu-pop" id="fileMenu" hidden>
         <button data-act="new"><svg viewBox="0 0 16 16"><path d="M3 2h6l4 4v8H3z"/><path d="M8 8v4M6 10h4"/></svg>New empty model</button>
-        <button data-act="open"><svg viewBox="0 0 16 16"><path d="M2 4h4l1.5 1.5H14V13H2z"/></svg>Open model (.json) or import STL…</button>
+        <button data-act="open"><svg viewBox="0 0 16 16"><path d="M2 4h4l1.5 1.5H14V13H2z"/></svg>Open model (.json) or import STL, 3MF, OBJ…</button>
         <button data-act="save"><svg viewBox="0 0 16 16"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 12v2h10v-2"/></svg>Save model (.json)</button>
         <hr>
         <button data-act="stl"><svg viewBox="0 0 16 16"><path d="M8 2 14 5v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3M8 8v6"/></svg>Export STL (visible parts)</button>
@@ -164,7 +160,6 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
         <button data-act="png"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="m4 11 3-3 2 2 2-2 2 3"/></svg>Picture of the view (.png)</button>
       </div>
     </div>
-    <button class="btn primary" id="mathBtn"><svg viewBox="0 0 16 16"><path d="M3 3h7M3 3l4 5-4 5h7"/><path d="M11.5 9.5 14 12M14 9.5 11.5 12"/></svg><span class="lbl">Show the math</span></button>
     <span id="status"></span>
   </header>
   <nav class="rail" aria-label="Tools">
@@ -173,6 +168,7 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
     <button class="tool" data-tool="rotate" title="Rotate (R)" aria-label="Rotate"><svg viewBox="0 0 20 20"><path d="M16 10a6 6 0 1 1-2-4.5"/><path d="M14.5 2.5 14 5.5l3 .5"/></svg><kbd>R</kbd></button>
     <button class="tool" data-tool="measure" title="Measure distance (M)" aria-label="Measure"><svg viewBox="0 0 20 20"><path d="M2.5 13.5 13.5 2.5l4 4-11 11z"/><path d="M6 10l1.5 1.5M8.5 7.5 10 9M11 5l1.5 1.5"/></svg><kbd>M</kbd></button>
     <hr>
+    <button class="tool" id="sketchBtn" title="Sketch, then extrude or revolve (S)" aria-label="Sketch"><svg viewBox="0 0 20 20"><path d="M2.5 14.5 8 17.5l9.5-5.5L12 9z"/><path d="M11 3.5l3 3-5 5H6v-3z"/></svg><kbd>S</kbd></button>
     <button class="tool" data-add="box" title="Add box (1)" aria-label="Add box"><svg viewBox="0 0 20 20"><path d="M10 2.5 17 6v8l-7 3.5L3 14V6z"/><path d="M3 6l7 3.5L17 6M10 9.5v8"/></svg><kbd>1</kbd></button>
     <button class="tool" data-add="cylinder" title="Add cylinder (2)" aria-label="Add cylinder"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/></svg><kbd>2</kbd></button>
     <button class="tool" data-add="tube" title="Add tube (3)" aria-label="Add tube"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><ellipse cx="10" cy="5" rx="3" ry="1.2"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/></svg><kbd>3</kbd></button>
@@ -193,6 +189,20 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
       <button class="btn" id="edgesBtn" title="Show edges">Edges</button>
       <select class="btn" id="snapSel" aria-label="Move snap" title="Move snap"><option value="0">Snap off</option><option value="0.5">Snap 0.5 mm</option><option value="1">Snap 1 mm</option><option value="5" selected>Snap 5 mm</option><option value="10">Snap 10 mm</option></select>
     </div>
+    <div class="sketchbar" id="sketchbar" hidden>
+      <b class="sktitle">Sketch</b>
+      <select class="btn" id="skPlane" aria-label="Sketch plane"><option value="ground">Ground (X–Z)</option><option value="front">Front (X–Y)</option><option value="right">Right (Z–Y)</option></select>
+      <label class="mini">Offset<input type="number" step="any" id="skOffset" value="0"><em>mm</em></label>
+      <span class="skseg">
+        <button class="btn" data-sktool="select" title="Select a shape (V)">Select</button>
+        <button class="btn" data-sktool="line" title="Line loop (L): click points, click the first again to close">Line</button>
+        <button class="btn" data-sktool="rect" title="Rectangle (B): two corners">Rect</button>
+        <button class="btn" data-sktool="circle" title="Circle (C): center, then radius">Circle</button>
+        <button class="btn" data-sktool="fillet" title="Fillet (F): click a corner to round it">Fillet</button>
+      </span>
+      <label class="mini">R<input type="number" step="any" min="0" id="skFillet" value="3"><em>mm</em></label>
+      <button class="btn" id="skDone">Cancel</button>
+    </div>
     <svg class="triad" id="triad" viewBox="-32 -32 64 64" aria-hidden="true"></svg>
     <div id="readout" hidden></div>
     <div id="hint"></div>
@@ -207,15 +217,10 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
     <div id="outputs"></div>
     <div id="warns"></div>
     <h2>Method</h2>
-    <p class="note">Units are mm, g and g/cm³. Each part is a parametric primitive whose <b>volume, area, center of mass and inertia tensor come from closed-form formulas</b>, then are rotated (R·I·Rᵀ) and combined with the parallel-axis theorem. Imported STL meshes are integrated triangle by triangle (divergence theorem) and must be watertight. All of it is checked against textbook answers; the faceted display mesh is shown against the exact value in the math drawer.</p>
-    <p class="note"><b>Limits:</b> primitives only, no booleans, fillets or sketches yet. Overlapping parts are counted twice. Hidden parts are left out of mass properties and STL export. The bounding box comes from the display mesh. Densities are nominal handbook values.</p>
+    <p class="note">Units are mm, g and g/cm³. Each part is a parametric primitive whose <b>volume, area, center of mass and inertia tensor come from closed-form formulas</b>, then are rotated (R·I·Rᵀ) and combined with the parallel-axis theorem. Sketched parts get exact profile moments (Green's theorem) times the extrude depth, or Pappus's theorems for revolves. Imported STL, 3MF and OBJ meshes are integrated triangle by triangle (divergence theorem) and must be watertight. All of it is checked against textbook answers.</p>
+    <p class="note"><b>Limits:</b> no booleans between solids and no 3D edge fillets yet; holes and fillets come from sketches. Overlapping parts are counted twice. Hidden parts are left out of mass properties and STL export. The bounding box comes from the display mesh. Densities are nominal handbook values.</p>
   </aside>
 </div>
-<div id="scrim" hidden></div>
-<section id="math" aria-label="The math" aria-hidden="true">
-  <header><h2>The math</h2><span class="note" id="mathSub"></span><button class="btn icon" id="mathClose" aria-label="Close"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></header>
-  <div id="mathBody"></div>
-</section>
-<input type="file" id="fileIn" accept=".json,.stl,application/json,model/stl" hidden>
+<input type="file" id="fileIn" accept=".json,.stl,.3mf,.obj,application/json,model/stl,model/3mf" hidden>
 <div id="toast" hidden></div>
 <!--SCRIPTS-->

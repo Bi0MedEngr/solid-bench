@@ -38,13 +38,19 @@ const Presets = (() => {
       part('Shaft', 'cylinder', { r: 10, h: 60 }, [0, 30, 0], null, 'ss316', '#a7b0b6'),
       part('O-ring (FKM)', 'torus', { R: 11.5, r: 1.5 }, [0, 40, 0], null, 'custom', '#3a3a3a', { rho: 1.85 }),
     ]),
+    plate: () => M(() => [part('Mounting plate', 'extrude', { d: 6 }, [0, 3, 0], null, 'al6061', '#9fb3c8', {
+      base: [0, 3, 0], sketch: { plane: 'ground', offset: 0, ents: [{ kind: 'rect', x: -40, y: -25, w: 80, h: 50, rr: 6 },
+        ...[[-32, -17], [32, -17], [32, 17], [-32, 17]].map(([x, y]) => ({ kind: 'circle', x, y, r: 3.25 })), { kind: 'circle', x: 0, y: 0, r: 11 }] } })]),
+    turned: () => M(() => [part('Turned shaft', 'revolve', { angle: 360 }, [0, 37.5, 0], null, 'steel1018', '#8a9399', {
+      axis: 'v', base: [0, 37.5, 0], sketch: { plane: 'front', offset: 0, ents: [{ kind: 'poly',
+        pts: [[0, 0], [10, 0], [10, 20], [7, 20], [7, 60], [5, 60], [5, 75], [0, 75]], f: [0, 1, 1, 1.5, 0.5, 1, 0.5, 0] }] } })]),
     cube: () => M(() => [part('100 mm cube', 'box', { w: 100, h: 100, d: 100 }, [0, 50, 0], null, 'al6061', '#9fb3c8')]),
     tilted: () => M(() => [part('Tilted plate', 'box', { w: 80, h: 6, d: 40 }, [0, 40, 0], [30, 0, 20], 'ss304', '#a7b0b6')]),
   };
   const titles = {
     rocket: 'Model rocket (cylinder, cone, 3 fins)', bushing: 'Flanged bushing (2 tubes)', dumbbell: 'Dumbbell (bar + 2 spheres)',
     bracket: 'L-bracket (2 boxes)', pulley: 'Pulley (hub, web, rim)', shaft: 'Stepped shaft (horizontal)',
-    oring: 'O-ring on shaft (torus)', cube: '100 mm aluminum cube (check)', tilted: 'Tilted plate (principal axes)',
+    oring: 'O-ring on shaft (torus)', plate: 'Mounting plate (sketch: fillets + 5 holes)', turned: 'Turned shaft (sketch: revolve with fillets)', cube: '100 mm aluminum cube (check)', tilted: 'Tilted plate (principal axes)',
   };
   return { list, titles };
 })();

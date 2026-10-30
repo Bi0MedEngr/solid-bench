@@ -1,5 +1,5 @@
 // Offline cache for the home-screen app. Serves from cache, refreshes in the background when online.
-const CACHE = 'solid-bench-fc162892af';
+const CACHE = 'solid-bench-0ce3435479';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

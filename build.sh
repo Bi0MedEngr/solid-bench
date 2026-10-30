@@ -5,7 +5,7 @@
 cd "$(dirname "$0")"
 python3 -I - <<'PY'
 import subprocess, tempfile, os, base64, shutil, hashlib
-SLUG, FILES = 'solid-bench', ['vendor/three.min.js', 'vendor/OrbitControls.js', 'vendor/TransformControls.js', 'core.js', 'presets.js', 'explain.js', 'app.js']   # order matters: app.js last
+SLUG, FILES = 'solid-bench', ['vendor/three.min.js', 'vendor/OrbitControls.js', 'vendor/TransformControls.js', 'core.js', 'presets.js', 'importers.js', 'app.js']   # order matters: app.js last
 page = open('page.html').read()
 faces = [('IBM Plex Sans', '400 600', 'plex-sans-var'), ('IBM Plex Sans Condensed', '500', 'plex-sans-cond-500'), ('IBM Plex Sans Condensed', '600', 'plex-sans-cond-600'),
          ('IBM Plex Mono', '400', 'plex-mono-400'), ('IBM Plex Mono', '500', 'plex-mono-500')]
