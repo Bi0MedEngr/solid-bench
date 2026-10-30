@@ -642,6 +642,9 @@
     ortho.position.copy(tgt).addScaledVector(W, Math.max(200, r * 4)); ortho.top = Math.max(60, r * 1.2); ortho.bottom = -ortho.top; ortho.zoom = 1;
     ortho.lookAt(tgt); orbit.target.copy(tgt); resize(); orbit.update(); requestRender();
   }
+  // The view bar wraps on narrow screens; keep the sketch bar just below it.
+  function placeSketchbar() { const vb = document.querySelector('.viewbar'); $('#sketchbar').style.top = (vb.offsetTop + vb.offsetHeight + 6) + 'px'; }
+  addEventListener('resize', () => { if (sk) placeSketchbar(); });
   function enterSketch(editId) {
     const p = editId ? model.parts.find(q => q.id === editId) : null;
     sk = { plane: p ? p.sketch.plane : 'ground', offset: p ? +p.sketch.offset || 0 : 0, ents: p ? JSON.parse(JSON.stringify(p.sketch.ents)) : [],
@@ -651,17 +654,17 @@
     gizmo.detach(); mpts = []; mText = ''; drawMeasure();
     if (cam !== ortho) setOrtho(true);
     orbit.enableRotate = false; orbit.mouseButtons.LEFT = THREE.MOUSE.PAN; orbit.touches.ONE = THREE.TOUCH.PAN;
-    $('#sketchbar').hidden = false; $('#triad').hidden = true; $('#skDist').value = sk.dist;
+    $('#sketchbar').hidden = false; $('#topSketchBtn').hidden = true; placeSketchbar(); $('#triad').hidden = true; $('#skDist').value = sk.dist;
     document.querySelectorAll('#skExtrudeMenu [data-op="join"], #skExtrudeMenu [data-op="cut"]').forEach(b => { b.disabled = !!p; b.title = p ? 'Join and Cut make new features; when editing a sketch, use New body to update this part' : ''; }); $('#skPlane').value = sk.plane; $('#skPlane').disabled = !!p; $('#skOffset').value = sk.offset; $('#skFillet').value = sk.filletR;
     document.querySelectorAll('[data-tool]').forEach(b => b.classList.remove('on'));
     skSetTool(sk.tool); syncScene(); skLook(); skRefresh();
-    $('#hint').textContent = p ? 'Editing the sketch · Extrude or Revolve on the right to apply it' : 'Pick a tool above · left-drag pans · scroll zooms';
+    $('#hint').textContent = p ? 'Editing the sketch · Extrude or Revolve on the right to apply it' : 'Draw a shape, set Distance, then pick from the Extrude menu (new body, join or cut) · left-drag pans';
   }
   function exitSketch() {
     const was = sk.wasOrtho; sk = null; skGroup.clear();
     for (const k of [persp, ortho]) k.up.set(0, 1, 0);
     orbit.enableRotate = true; orbit.mouseButtons.LEFT = THREE.MOUSE.ROTATE; orbit.touches.ONE = THREE.TOUCH.ROTATE;
-    $('#sketchbar').hidden = true; $('#triad').hidden = false; $('#readout').hidden = true; setOrtho(was);
+    $('#sketchbar').hidden = true; $('#topSketchBtn').hidden = false; $('#triad').hidden = false; $('#readout').hidden = true; setOrtho(was);
     setTool(tool); update(); setView('iso');
   }
   function skFinish(kind) {
@@ -787,6 +790,7 @@
   }
   document.querySelectorAll('[data-sktool]').forEach(b => b.addEventListener('click', () => skSetTool(b.dataset.sktool)));
   $('#sketchBtn').addEventListener('click', () => { if (!sk) enterSketch(null); });
+  $('#topSketchBtn').addEventListener('click', () => { if (!sk) enterSketch(null); });
   $('#skPlane').addEventListener('change', e => { sk.plane = e.target.value; skLook(); skRefresh(false); });
   $('#skOffset').addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v)) { sk.offset = v; skLook(); skRefresh(false); } });
   $('#skFillet').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0) sk.filletR = v; else e.target.value = sk.filletR; });
