@@ -192,6 +192,47 @@ near(C.dimProblem(skp('extrude', 'front', [{ kind: 'rect', x: 0, y: 0, w: 10, h:
   for (let i = 0; i < 3; i++) near(info.c[i], w.c[i], 0.01, `placed extrude centroid[${i}]`);
   rel(info.I[0][0], w.I[0][0], 2e-3, 'placed extrude Ixx (world)'); near(info.I[0][2], w.I[0][2], 2e-3 * Math.abs(info.I[0][0]), 'placed extrude Ixz (world)'); }
 
+// ---- booleans: Join and Cut bodies vs hand answers ----
+{ const box = (name, w, h, d, pos, rot) => ({ id: name, name, type: 'box', dims: { w, h, d }, pos, rot: rot || [0, 0, 0], mat: 'custom', rho: 1000, visible: true });
+  const body = (children, extra) => Object.assign({ id: 'b', name: 'Body', type: 'body', children, base: [0, 0, 0], pos: [0, 0, 0], rot: [0, 0, 0], mat: 'custom', rho: 1000, visible: true }, extra || {});
+  const lp = p => C.localProps(p, { meshes: {}, seg: 48 });
+  // internal void: fully enclosed → exact subtraction
+  { const b = body([{ op: 'base', part: box('A', 60, 20, 40, [0, 10, 0]) }, { op: 'cut', part: box('V', 10, 6, 10, [5, 10, 0]) }]), e = lp(b);
+    near(e.V, 48000 - 600, 1e-6, 'cut fully inside: exact volume'); near(e.approx ? 1 : 0, 0, 0, 'cut fully inside: flagged exact');
+    near(e.c[0], (0 - 600 * 5) / 47400, 1e-9, 'cut fully inside: centroid shifts away from the void'); }
+  // open pocket from the top (tool sticks out above): overlap from the mesh, exact for flat faces
+  { const b = body([{ op: 'base', part: box('A', 60, 20, 40, [0, 10, 0]) }, { op: 'cut', part: box('P', 20, 20, 20, [0, 20, 0]) }]), e = lp(b);
+    near(e.V, 48000 - 20 * 10 * 20, 1e-6, 'open pocket: volume'); near(e.c[1], (48000 * 10 - 4000 * 15) / 44000, 1e-6, 'open pocket: centroid drops');
+    const m = C.meshProps(C.partMesh(b, 48, {}).pos); near(m.V, e.V, 1e-6, 'open pocket: body mesh volume matches'); }
+  // join two overlapping boxes: Va + Vb − overlap
+  { const b = body([{ op: 'base', part: box('A', 40, 10, 40, [0, 5, 0]) }, { op: 'join', part: box('B', 10, 30, 10, [15, 15, 15]) }]), e = lp(b), ov = 10 * 10 * 10;
+    near(e.V, 16000 + 3000 - ov, 1e-6, 'join with overlap: Va + Vb − overlap'); near(C.meshProps(C.partMesh(b, 48, {}).pos).V, e.V, 1e-6, 'join: body mesh volume matches'); }
+  // join touching boxes (the L-bracket example) == the two-part assembly, mass and inertia
+  { const asm = C.solve(P.list.bracket()), parts = P.list.bracket().parts, b = body([{ op: 'base', part: parts[0] }, { op: 'join', part: parts[1] }], { mat: 'al6061' });
+    const s = C.solve({ parts: [b], meshes: {} });
+    rel(s.M, asm.M, 1e-9, 'joined L-bracket mass = two-part assembly'); rel(s.I[0][0], asm.I[0][0], 1e-9, 'joined L-bracket Ixx = assembly'); rel(s.I[0][1], asm.I[0][1], 1e-9, 'joined L-bracket Ixy = assembly'); }
+  // hole cut clean through a plate: partial overlap → mesh, within 0.1 %
+  { const cyl = { id: 'h', name: 'Hole', type: 'cylinder', dims: { r: 8, h: 20 }, pos: [10, 3, 0], rot: [0, 0, 0] };
+    const b = body([{ op: 'base', part: box('Pl', 60, 6, 40, [0, 3, 0]) }, { op: 'cut', part: cyl }]), e = lp(b);
+    rel(e.V, 60 * 6 * 40 - PI * 64 * 6, 1e-3, 'through hole: volume within 0.1 % (mesh overlap)'); near(e.approx ? 1 : 0, 1, 0, 'through hole: flagged as mesh-based'); }
+  // closed cylindrical void: contained → exact even though curved
+  { const cyl = { id: 'h', name: 'Bore', type: 'cylinder', dims: { r: 5, h: 10 }, pos: [0, 10, 0], rot: [0, 0, 0] };
+    const b = body([{ op: 'base', part: box('A', 30, 20, 30, [0, 10, 0]) }, { op: 'cut', part: cyl }]), e = lp(b);
+    rel(e.V, 18000 - PI * 250, 1e-12, 'curved void fully inside: exact'); }
+  // moved, rotated body: world props vs integrating the moved mesh
+  { const b = body([{ op: 'base', part: box('A', 40, 10, 30, [0, 5, 0]) }, { op: 'join', part: box('B', 10, 20, 10, [12, 15, 8]) }, { op: 'cut', part: box('C', 8, 30, 8, [-10, 5, -5]) }], { base: [0, 8, 0], pos: [20, 30, -10], rot: [25, -40, 15] });
+    const info = C.partInfo(b, { parts: [b], meshes: {} }), w = C.meshProps(C.transformPos(C.partMesh(b, 48, {}).pos, C.rotMatrix(b.rot), b.pos));
+    for (let i = 0; i < 3; i++) near(info.c[i], w.c[i], 1e-6, `placed body centroid[${i}]`);
+    rel(info.I[1][1], w.I[1][1], 1e-6, 'placed body Iyy'); near(info.I[0][2], w.I[0][2], 1e-6 * Math.abs(info.I[1][1]), 'placed body Ixz'); }
+  // into/out of a body frame round-trips a pose
+  { const b = body([], { base: [1, 2, 3], pos: [10, -5, 7], rot: [30, 20, -50] }), part = box('Q', 1, 1, 1, [4, 5, 6], [10, 70, -20]);
+    const back = C.outOfBody(b, C.intoBody(b, part));
+    for (let i = 0; i < 3; i++) near(back.pos[i], part.pos[i], 1e-5, `intoBody/outOfBody keeps position[${i}]`);
+    const R1 = C.rotMatrix(back.rot), R0 = C.rotMatrix(part.rot); let err = 0; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) err = Math.max(err, Math.abs(R1[i][j] - R0[i][j]));
+    near(err, 0, 1e-7, 'intoBody/outOfBody keeps rotation'); }
+  near(C.overlapVolume(box('A', 10, 10, 10, [0, 0, 0]), box('B', 10, 10, 10, [5, 0, 0]), { meshes: {} }), 500, 1e-6, 'overlap volume of two shifted cubes');
+}
+
 // ---- 3MF / OBJ import ----
 function zipOf(files) {   // minimal zip writer: { name: [text, deflate?] }
   const locals = [], cents = []; let off = 0;

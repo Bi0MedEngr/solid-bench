@@ -118,6 +118,17 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
 .sketchbar { position: absolute; top: 46px; left: 8px; right: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--accent); border-radius: 10px; padding: 6px 8px; z-index: 5; }
 .sketchbar .btn { padding: 4px 8px; font-size: 12px; }
 .sktitle { font: 600 12px var(--cond); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-right: 2px; }
+.skgrow { flex: 1; }
+.sketchbar .menu-pop { min-width: 270px; }
+.sketchbar .menu-pop button:disabled { opacity: .45; cursor: not-allowed; }
+.sketchbar #skExtrudeBtn svg { width: 14px; height: 14px; }
+.feat { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.feat:first-child { border-top: 0; }
+.feat .op { font: 600 10.5px var(--cond); letter-spacing: .08em; text-transform: uppercase; border-radius: 5px; padding: 1px 6px; background: var(--accent-soft); color: var(--accent); flex: none; }
+.feat .op.cut { background: var(--warn-soft); color: var(--warn); }
+.feat .fn { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feat .inp { width: 92px; }
+.feat .btn { padding: 2px 7px; font-size: 11.5px; }
 .skseg { display: inline-flex; gap: 3px; flex-wrap: wrap; }
 .mini { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 7px; background: var(--paper); padding: 0 6px; }
 .mini input { width: 52px; border: 0; background: none; font: 12px var(--mono); padding: 4px 0; outline: none; }
@@ -201,6 +212,16 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
         <button class="btn" data-sktool="fillet" title="Fillet (F): click a corner to round it">Fillet</button>
       </span>
       <label class="mini">R<input type="number" step="any" min="0" id="skFillet" value="3"><em>mm</em></label>
+      <span class="skgrow"></span>
+      <label class="mini">Distance<input type="number" step="any" id="skDist" value="10"><em>mm</em></label>
+      <div class="menu">
+        <button class="btn primary" id="skExtrudeBtn" aria-haspopup="true">Extrude<svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+        <div class="menu-pop" id="skExtrudeMenu" hidden>
+          <button data-op="new"><svg viewBox="0 0 16 16"><path d="M8 2 14 5v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3M8 8v6"/></svg>New body</button>
+          <button data-op="join"><svg viewBox="0 0 16 16"><rect x="2" y="5" width="7" height="7" rx="1"/><rect x="7" y="2" width="7" height="7" rx="1"/></svg>Join to the body it touches</button>
+          <button data-op="cut"><svg viewBox="0 0 16 16"><path d="M2 4h12v9H2z"/><path d="M6 4v4h4V4" stroke-dasharray="2 1.5"/></svg>Cut from the bodies it passes through</button>
+        </div>
+      </div>
       <button class="btn" id="skDone">Cancel</button>
     </div>
     <svg class="triad" id="triad" viewBox="-32 -32 64 64" aria-hidden="true"></svg>
@@ -217,8 +238,8 @@ input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); 
     <div id="outputs"></div>
     <div id="warns"></div>
     <h2>Method</h2>
-    <p class="note">Units are mm, g and g/cm³. Each part is a parametric primitive whose <b>volume, area, center of mass and inertia tensor come from closed-form formulas</b>, then are rotated (R·I·Rᵀ) and combined with the parallel-axis theorem. Sketched parts get exact profile moments (Green's theorem) times the extrude depth, or Pappus's theorems for revolves. Imported STL, 3MF and OBJ meshes are integrated triangle by triangle (divergence theorem) and must be watertight. All of it is checked against textbook answers.</p>
-    <p class="note"><b>Limits:</b> no booleans between solids and no 3D edge fillets yet; holes and fillets come from sketches. Overlapping parts are counted twice. Hidden parts are left out of mass properties and STL export. The bounding box comes from the display mesh. Densities are nominal handbook values.</p>
+    <p class="note">Units are mm, g and g/cm³. Each part is a parametric primitive whose <b>volume, area, center of mass and inertia tensor come from closed-form formulas</b>, then are rotated (R·I·Rᵀ) and combined with the parallel-axis theorem. Sketched parts get exact profile moments (Green's theorem) times the extrude depth, or Pappus's theorems for revolves. Joined and cut bodies add and subtract those moments, minus the overlap. Imported STL, 3MF and OBJ meshes are integrated triangle by triangle (divergence theorem) and must be watertight. All of it is checked against textbook answers.</p>
+    <p class="note"><b>Limits:</b> no 3D edge fillets yet; radii come from sketches. A Join or Cut that only partly overlaps a body gets its overlap from the mesh (about 0.1 % on curved faces); overlaps that are all-or-nothing stay exact. Overlapping parts are counted twice. Hidden parts are left out of mass properties and STL export. The bounding box comes from the display mesh. Densities are nominal handbook values.</p>
   </aside>
 </div>
 <input type="file" id="fileIn" accept=".json,.stl,.3mf,.obj,application/json,model/stl,model/3mf" hidden>

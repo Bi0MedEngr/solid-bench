@@ -99,7 +99,7 @@
     for (const o of objs.values()) o.edges.material.color.copy(col(o.mesh.userData.id === selId ? css('--accent') : css('--edge')));
     measureGroup.children.forEach(c => c.material && c.material.color && c.material.color.copy(col(css('--measure'))));
   }
-  function geomKey(p) { return p.type + JSON.stringify(p.dims) + (p.type === 'mesh' ? p.mesh : model.seg) + (p.sketch ? JSON.stringify([p.sketch, p.axis, p.base]) : ''); }
+  function geomKey(p) { return p.type + JSON.stringify(p.dims) + (p.type === 'mesh' ? p.mesh : model.seg) + (p.sketch ? JSON.stringify([p.sketch, p.axis, p.base]) : '') + (p.children ? JSON.stringify([p.children, p.base]) : ''); }
   function syncScene() {
     const seen = new Set();
     for (const p of model.parts) {
@@ -312,6 +312,12 @@
     $('#inspTitle').textContent = Core.TYPES[p.type].label;
     const rows = [];
     rows.push(`<label class="field"><span>Name</span><span class="inp"><input type="text" id="nameIn" value="${esc(p.name)}"></span></label>`);
+    if (p.type === 'body') {
+      const OPN = { base: 'Base', join: 'Join', cut: 'Cut' };
+      rows.push(`<div class="field"><span>Features</span></div><div class="feats">${p.children.map((c, i) => `<div class="feat"><span class="op${c.op === 'cut' ? ' cut' : ''}">${OPN[c.op]}</span><span class="fn">${esc(c.part.name || Core.TYPES[c.part.type].label)}</span>${c.part.type === 'extrude' ? `<span class="inp"><input type="number" step="any" data-fd="${i}" value="${c.part.dims.d}" aria-label="${esc(c.part.name)} distance (mm)"><em>mm</em></span>` : ''}${i ? `<button class="btn" data-fdel="${i}" aria-label="Remove ${esc(c.part.name)}">Remove</button>` : ''}</div>`).join('')}</div>`);
+      const info = res.parts[model.parts.indexOf(p)];
+      if (info && info.local && info.local.approx) rows.push('<p class="note">One feature only partly overlaps the body, so that overlap is integrated from the mesh (about 0.1 % on curved faces).</p>');
+    }
     if (p.sketch) rows.push(`<div class="field"><span>Sketch</span><span class="note">${esc(Core.PLANES[p.sketch.plane].label)}, ${p.sketch.ents.length} shape${p.sketch.ents.length === 1 ? '' : 's'}</span></div>`);
     const dimFields = Core.TYPES[p.type].dims.map(([k, label, , unit]) => numField(label, unit || 'mm', p.dims[k], null, `${p.type === 'extrude' ? '' : 'min="0" '}data-dim="${k}"`));
     rows.push(...dimFields.map(f => f.html));
@@ -326,6 +332,14 @@
     box.innerHTML = rows.join('');
     $('#nameIn').addEventListener('change', e => { const v = e.target.value.trim(); if (v) edit(() => { p.name = v; }); });
     box.querySelectorAll('[data-dim]').forEach(inp => inp.addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v) && (v >= 0 || p.type === 'extrude')) edit(() => { p.dims[inp.dataset.dim] = v; }); else { toast('Enter a number of 0 or more.'); refreshInspectorValues(); } }));
+    box.querySelectorAll('[data-fd]').forEach(inp => inp.addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v) && v !== 0) edit(() => { p.children[+inp.dataset.fd].part.dims.d = v; }); else { toast('Distance must be a number other than 0.'); e.target.value = p.children[+inp.dataset.fd].part.dims.d; } }));
+    box.querySelectorAll('[data-fdel]').forEach(b => b.addEventListener('click', () => edit(() => {
+      p.children.splice(+b.dataset.fdel, 1);
+      if (p.children.length === 1) {   // only the base is left: back to a plain part
+        const q = Object.assign(Core.outOfBody(p, p.children[0].part), { id: p.id, name: p.name, mat: p.mat, rho: p.rho, color: p.color, visible: p.visible });
+        model.parts[model.parts.indexOf(p)] = q;
+      }
+    })));
     const axisSel = $('#axisSel'); if (axisSel) axisSel.addEventListener('change', e => edit(() => { p.axis = e.target.value; }));
     const editSk = $('#editSkBtn'); if (editSk) editSk.addEventListener('click', () => enterSketch(p.id));
     const upr = $('#uprightBtn'); if (upr) upr.addEventListener('click', () => turnUpright(p));
@@ -632,12 +646,13 @@
     const p = editId ? model.parts.find(q => q.id === editId) : null;
     sk = { plane: p ? p.sketch.plane : 'ground', offset: p ? +p.sketch.offset || 0 : 0, ents: p ? JSON.parse(JSON.stringify(p.sketch.ents)) : [],
       tool: p ? 'select' : 'rect', draft: null, editId: p ? p.id : null, stack: [], sel: null, filletR: 3, cursor: null, armCancel: 0,
-      dist: p && p.type === 'extrude' ? p.dims.d : 10, axis: p && p.axis === 'u' ? 'u' : 'v', angle: p && p.type === 'revolve' ? p.dims.angle : 360, wasOrtho: cam === ortho };
+      selAtEntry: selId, dist: p && p.type === 'extrude' ? p.dims.d : 10, axis: p && p.axis === 'u' ? 'u' : 'v', angle: p && p.type === 'revolve' ? p.dims.angle : 360, wasOrtho: cam === ortho };
     sk.f = skFrame();
     gizmo.detach(); mpts = []; mText = ''; drawMeasure();
     if (cam !== ortho) setOrtho(true);
     orbit.enableRotate = false; orbit.mouseButtons.LEFT = THREE.MOUSE.PAN; orbit.touches.ONE = THREE.TOUCH.PAN;
-    $('#sketchbar').hidden = false; $('#triad').hidden = true; $('#skPlane').value = sk.plane; $('#skPlane').disabled = !!p; $('#skOffset').value = sk.offset; $('#skFillet').value = sk.filletR;
+    $('#sketchbar').hidden = false; $('#triad').hidden = true; $('#skDist').value = sk.dist;
+    document.querySelectorAll('#skExtrudeMenu [data-op="join"], #skExtrudeMenu [data-op="cut"]').forEach(b => { b.disabled = !!p; b.title = p ? 'Join and Cut make new features; when editing a sketch, use New body to update this part' : ''; }); $('#skPlane').value = sk.plane; $('#skPlane').disabled = !!p; $('#skOffset').value = sk.offset; $('#skFillet').value = sk.filletR;
     document.querySelectorAll('[data-tool]').forEach(b => b.classList.remove('on'));
     skSetTool(sk.tool); syncScene(); skLook(); skRefresh();
     $('#hint').textContent = p ? 'Editing the sketch · Extrude or Revolve on the right to apply it' : 'Pick a tool above · left-drag pans · scroll zooms';
@@ -665,6 +680,46 @@
     });
     exitSketch();
   }
+  // Extrude Join / Cut: Join merges the extrusion into the body (or bodies) it overlaps or touches; Cut removes it
+  // from every body it passes through. A plain part becomes a body (same id, name, material) with a feature list.
+  function partToFeature(p) { const q = JSON.parse(JSON.stringify(p)); delete q.mat; delete q.rho; delete q.color; delete q.visible; delete q.group; return q; }
+  function asBody(p) {
+    if (p.type === 'body') return p;
+    const b = { id: p.id, name: p.name, type: 'body', children: [{ op: 'base', part: partToFeature(p) }], base: p.pos.slice(), pos: p.pos.slice(), rot: [0, 0, 0], mat: p.mat, rho: p.rho, color: p.color, visible: true };
+    model.parts[model.parts.indexOf(p)] = b; return b;
+  }
+  function boxesTouch(a, b, tol) { for (let k = 0; k < 3; k++) if (a.hi[k] < b.lo[k] - tol || b.hi[k] < a.lo[k] - tol) return false; return true; }
+  function skBoolean(op) {
+    if (sk.draft && sk.draft.kind === 'line' && sk.draft.pts.length >= 3) skCloseLine();
+    const L = Core.sketchLoops({ ents: sk.ents }, 64); if (L.problem) { toast(L.problem + '.'); return; }
+    const tool = { id: newId(), type: 'extrude', sketch: { plane: sk.plane, offset: +sk.offset || 0, ents: JSON.parse(JSON.stringify(sk.ents)) }, dims: { d: +sk.dist }, base: [0, 0, 0], pos: [0, 0, 0], rot: [0, 0, 0] };
+    tool.name = `${op === 'cut' ? 'Cut' : 'Join'} ${model.parts.reduce((n, p) => n + (p.children ? p.children.filter(c => c.op === op).length : 0), 0) + 1}`;
+    tool.base = Core.sketchCenter(tool, 48); tool.pos = tool.base.slice();
+    const tb = partBox(tool), env = { meshes: model.meshes };
+    let targets = model.parts.filter(p => p.visible !== false && !Core.dimProblem(p) && boxesTouch(partBox(p), tb, 1e-6));
+    if (op === 'cut') targets = targets.filter(p => Core.overlapVolume(p, tool, env) > 1e-6);
+    targets.sort((x, y) => (y.id === sk.selAtEntry) - (x.id === sk.selAtEntry));
+    if (!targets.length) { toast(op === 'cut' ? 'Nothing to cut: the extrusion does not pass through any body. Check the distance and its direction (negative goes the other way).' : 'Nothing to join: the extrusion does not touch any body. Use New body instead.'); return; }
+    let firstId;
+    edit(() => {
+      if (op === 'cut') for (const t of targets) { const b = asBody(t); b.children.push({ op: 'cut', part: Core.intoBody(b, tool) }); firstId = firstId || b.id; }
+      else {
+        const b = asBody(targets[0]);
+        for (const o of targets.slice(1)) { b.children.push({ op: 'join', part: Core.intoBody(b, partToFeature(o)) }); model.parts = model.parts.filter(q => q !== o); }
+        b.children.push({ op: 'join', part: Core.intoBody(b, tool) }); firstId = b.id;
+      }
+      selId = firstId;
+    });
+    const gone = model.parts.filter((p, i) => p.type === 'body' && res.parts[i] && !res.parts[i].problem && res.parts[i].V < 1e-9);
+    exitSketch();
+    toast(gone.length ? `That cut removed all of ${gone.map(p => p.name).join(', ')}. Undo brings it back.` : `${op === 'cut' ? 'Cut' : 'Joined'} ${targets.map(p => p.name).join(', ')}.`);
+  }
+  const skMenu = $('#skExtrudeMenu');
+  $('#skExtrudeBtn').addEventListener('click', e => { e.stopPropagation(); skMenu.hidden = !skMenu.hidden; });
+  addEventListener('click', e => { if (!skMenu.hidden && !e.target.closest('#skExtrudeBtn')) skMenu.hidden = true; });
+  skMenu.querySelectorAll('[data-op]').forEach(b => b.addEventListener('click', () => { skMenu.hidden = true; if (b.dataset.op === 'new') skFinish('extrude'); else skBoolean(b.dataset.op); }));
+  $('#skDist').addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v) && v !== 0) sk.dist = v; else { toast('Extrude distance must be a number other than 0 (negative goes the other way).'); e.target.value = sk.dist; } });
+
   function skCancel() {
     const dirty = sk.editId ? JSON.stringify(sk.ents) !== JSON.stringify(model.parts.find(q => q.id === sk.editId).sketch.ents) : sk.ents.length > 0;
     if (dirty && Date.now() - sk.armCancel > 2500) { sk.armCancel = Date.now(); toast('Press Cancel (or Esc) again to throw this sketch away.'); return; }
@@ -708,8 +763,6 @@
     }).join('');
     box.innerHTML = `${status}
       <div class="skfinish">
-        <div class="field"><span>Extrude</span><span class="inp"><input type="number" step="any" id="skDist" value="${sk.dist}"><em>mm</em></span></div>
-        <button class="btn primary" id="skExtrude">Extrude</button>
         <div class="field"><span>Revolve about</span><span class="inp"><select id="skAxis"><option value="v"${sk.axis === 'v' ? ' selected' : ''}>V axis (green)</option><option value="u"${sk.axis === 'u' ? ' selected' : ''}>U axis (red)</option></select></span></div>
         <div class="field"><span>Angle</span><span class="inp"><input type="number" step="any" min="0" max="360" id="skAngle" value="${sk.angle}"><em>°</em></span></div>
         <button class="btn primary" id="skRevolve">Revolve</button>
@@ -717,10 +770,9 @@
       </div>
       ${ents ? `<h3 class="skh">Shapes</h3>${ents}` : ''}
       <p class="note">Values are in sketch coordinates: U runs along the red line, V along the green one. A line loop's R is the fillet radius at that corner. In the view, the Fillet tool (F) rounds a clicked corner with the radius shown in the bar.</p>`;
-    $('#skDist').addEventListener('change', e => { const v = parseFloat(e.target.value); if (isFinite(v) && v !== 0) sk.dist = v; else { toast('Extrude distance must be a number other than 0 (negative goes the other way).'); e.target.value = sk.dist; } });
     $('#skAngle').addEventListener('change', e => { const v = parseFloat(e.target.value); if (v > 0 && v <= 360) sk.angle = v; else { toast('Angle must be between 0 and 360°.'); e.target.value = sk.angle; } });
     $('#skAxis').addEventListener('change', e => { sk.axis = e.target.value; });
-    $('#skExtrude').addEventListener('click', () => skFinish('extrude')); $('#skRevolve').addEventListener('click', () => skFinish('revolve')); $('#skCancelBtn').addEventListener('click', skCancel);
+    $('#skRevolve').addEventListener('click', () => skFinish('revolve')); $('#skCancelBtn').addEventListener('click', skCancel);
     box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { skPush(); sk.ents.splice(+b.dataset.del, 1); sk.sel = null; skRefresh(); }));
     box.querySelectorAll('.skent').forEach(d => d.addEventListener('focusin', () => { if (sk.sel !== +d.dataset.ent) { sk.sel = +d.dataset.ent; skDraw(); requestRender(); d.classList.add('sel'); } }));
     box.querySelectorAll('[data-e]').forEach(inp => inp.addEventListener('change', e => {

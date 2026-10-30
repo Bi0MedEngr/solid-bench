@@ -15,6 +15,7 @@ const Core = (() => {
     cone:     { label: 'Cone',     dims: [['r1', 'Bottom radius', 15], ['r2', 'Top radius', 0], ['h', 'Height', 30]] },
     torus:    { label: 'Torus',    dims: [['R', 'Ring radius', 20], ['r', 'Tube radius', 5]] },
     mesh:     { label: 'Mesh',     dims: [] },
+    body:     { label: 'Body',     dims: [] },
     extrude:  { label: 'Extrude',  dims: [['d', 'Distance', 10]] },
     revolve:  { label: 'Revolve',  dims: [['angle', 'Angle', 360, '°']] },
   };
@@ -25,6 +26,7 @@ const Core = (() => {
     const d = p.dims || {};
     for (const [k, label] of TYPES[p.type].dims) if (typeof d[k] !== 'number' || !isFinite(d[k])) return `${label} must be a number`;
     switch (p.type) {
+      case 'body': { for (const c of p.children || []) { const q = dimProblem(c.part); if (q) return `${c.part.name}: ${q}`; } return (p.children || []).length ? '' : 'This body has no features'; }
       case 'extrude': return d.d !== 0 ? sketchProblem(p) : 'Extrude distance must not be 0';
       case 'revolve': return d.angle > 0 && d.angle <= 360 ? sketchProblem(p) : 'Revolve angle must be between 0 and 360°';
       case 'box': return d.w > 0 && d.h > 0 && d.d > 0 ? '' : 'Box sides must be > 0';
@@ -149,6 +151,7 @@ const Core = (() => {
       case 'torus': return lathe(arc(d.R, 0, d.r, 0, 2 * PI, seg).slice(0, -1), seg);
       case 'mesh': { const m = meshes && meshes[p.mesh]; return m ? { pos: m.pos, nrm: null } : { pos: [], nrm: null }; }
       case 'extrude': case 'revolve': return sketchMesh(p, seg);
+      case 'body': return bodyMesh(p, seg, meshes);
     }
     return { pos: [], nrm: [] };
   }
@@ -490,6 +493,169 @@ const Core = (() => {
   }
   const Core_mulMV = (M, v) => mulMV(M, v), Core_mulMM = (A, B) => mulMM(A, B), Core_T = A => T(A);
 
+
+  // ---------- solid booleans (CSG on meshes) ----------
+  // BSP-tree constructive solid geometry (the classic Naylor/Thibault scheme as popularized by csg.js), written here
+  // iteratively so tall trees from curved parts cannot overflow the stack. Inputs and outputs are triangle meshes.
+  const CSG_EPS = 1e-5;
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  function polyOf(verts, plane) { return { verts, plane }; }
+  function flipPoly(q) { return { verts: q.verts.slice().reverse().map(v => ({ p: v.p, n: [-v.n[0], -v.n[1], -v.n[2]] })), plane: { n: q.plane.n.map(x => -x), w: -q.plane.w } }; }
+  function splitPoly(pl, q, cf, cb, f, b) {
+    const types = []; let all = 0;
+    for (const v of q.verts) { const t = dot3(pl.n, v.p) - pl.w, ty = t < -CSG_EPS ? 2 : t > CSG_EPS ? 1 : 0; all |= ty; types.push(ty); }
+    if (all === 0) (dot3(pl.n, q.plane.n) > 0 ? cf : cb).push(q);
+    else if (all === 1) f.push(q);
+    else if (all === 2) b.push(q);
+    else {
+      const fs = [], bs = [], m = q.verts.length;
+      for (let i = 0; i < m; i++) {
+        const j = (i + 1) % m, ti = types[i], tj = types[j], vi = q.verts[i], vj = q.verts[j];
+        if (ti !== 2) fs.push(vi);
+        if (ti !== 1) bs.push(vi);
+        if ((ti | tj) === 3) {
+          const t = (pl.w - dot3(pl.n, vi.p)) / dot3(pl.n, sub(vj.p, vi.p));
+          const v = { p: vi.p.map((x, k) => x + (vj.p[k] - x) * t), n: vi.n.map((x, k) => x + (vj.n[k] - x) * t) };
+          fs.push(v); bs.push(v);
+        }
+      }
+      if (fs.length >= 3) f.push(polyOf(fs, q.plane));
+      if (bs.length >= 3) b.push(polyOf(bs, q.plane));
+    }
+  }
+  function Node(polys) { this.plane = null; this.front = null; this.back = null; this.polygons = []; if (polys) this.build(polys); }
+  Node.prototype.nodes = function () { const out = [], st = [this]; while (st.length) { const n = st.pop(); out.push(n); if (n.front) st.push(n.front); if (n.back) st.push(n.back); } return out; };
+  Node.prototype.build = function (polys) {
+    const st = [[this, polys]];
+    while (st.length) {
+      const [n, ps] = st.pop(); if (!ps.length) continue;
+      if (!n.plane) n.plane = ps[0].plane;
+      const f = [], b = [];
+      for (const q of ps) splitPoly(n.plane, q, n.polygons, n.polygons, f, b);
+      if (f.length) { n.front = n.front || new Node(); st.push([n.front, f]); }
+      if (b.length) { n.back = n.back || new Node(); st.push([n.back, b]); }
+    }
+  };
+  Node.prototype.clip = function (polys) {   // keep the parts of polys outside this solid
+    const out = [], st = [[this, polys]];
+    while (st.length) {
+      const [n, ps] = st.pop();
+      if (!n.plane) { for (const q of ps) out.push(q); continue; }
+      const f = [], b = [];
+      for (const q of ps) splitPoly(n.plane, q, f, b, f, b);
+      if (n.front) st.push([n.front, f]); else for (const q of f) out.push(q);
+      if (n.back) st.push([n.back, b]);
+    }
+    return out;
+  };
+  Node.prototype.clipTo = function (bsp) { for (const n of this.nodes()) n.polygons = bsp.clip(n.polygons); };
+  Node.prototype.invert = function () {
+    for (const n of this.nodes()) { n.polygons = n.polygons.map(flipPoly); if (n.plane) n.plane = { n: n.plane.n.map(x => -x), w: -n.plane.w }; const t = n.front; n.front = n.back; n.back = t; }
+  };
+  Node.prototype.all = function () { const out = []; for (const n of this.nodes()) for (const q of n.polygons) out.push(q); return out; };
+  function meshToPolys(m) {
+    const P = m.pos, N = m.nrm, out = [];
+    for (let i = 0; i + 8 < P.length; i += 9) {
+      const a = [P[i], P[i + 1], P[i + 2]], b = [P[i + 3], P[i + 4], P[i + 5]], c = [P[i + 6], P[i + 7], P[i + 8]];
+      const nn = cross(sub(b, a), sub(c, a)), L = norm(nn); if (!(L > 1e-12)) continue;
+      const n = nn.map(x => x / L), vn = k => N && N.length === P.length ? [N[i + 3 * k], N[i + 3 * k + 1], N[i + 3 * k + 2]] : n;
+      out.push(polyOf([{ p: a, n: vn(0) }, { p: b, n: vn(1) }, { p: c, n: vn(2) }], { n, w: dot3(n, a) }));
+    }
+    return out;
+  }
+  function polysToMesh(polys) {
+    const pos = [], nrm = [];
+    for (const q of polys) for (let k = 1; k + 1 < q.verts.length; k++) for (const v of [q.verts[0], q.verts[k], q.verts[k + 1]]) { pos.push(v.p[0], v.p[1], v.p[2]); nrm.push(v.n[0], v.n[1], v.n[2]); }
+    return { pos, nrm };
+  }
+  function csg(op, A, B) {
+    const a = new Node(meshToPolys(A)), b = new Node(meshToPolys(B));
+    if (op === 'union') { a.clipTo(b); b.clipTo(a); b.invert(); b.clipTo(a); b.invert(); a.build(b.all()); }
+    else if (op === 'subtract') { a.invert(); a.clipTo(b); b.clipTo(a); b.invert(); b.clipTo(a); b.invert(); a.build(b.all()); a.invert(); }
+    else { a.invert(); b.clipTo(a); b.invert(); a.clipTo(b); b.clipTo(a); a.build(b.all()); a.invert(); }
+    return polysToMesh(a.all());
+  }
+
+  // Raw moments (V, ∫x, ∫xxᵀ about the origin) add and subtract; centroidal props convert both ways.
+  function toRaw(pr) {
+    const V = pr.V, c = pr.c, I = pr.I, tr = (I[0][0] + I[1][1] + I[2][2]) / 2;
+    return { V, S: c.map(x => x * V), J: [0, 1, 2].map(i => [0, 1, 2].map(j => (i === j ? tr : 0) - I[i][j] + V * c[i] * c[j])) };
+  }
+  function fromRaw(r) {
+    const V = r.V, c = V ? r.S.map(x => x / V) : [0, 0, 0], Jc = r.J.map((row, i) => row.map((x, j) => x - V * c[i] * c[j])), tr = Jc[0][0] + Jc[1][1] + Jc[2][2];
+    return { V, c, I: Jc.map((row, i) => row.map((x, j) => (i === j ? tr : 0) - x)) };
+  }
+  const addRaw = (a, b, s) => ({ V: a.V + s * b.V, S: a.S.map((x, i) => x + s * b.S[i]), J: a.J.map((row, i) => row.map((x, j) => x + s * b.J[i][j])) });
+
+  // A body is a list of features in its own frame: [{ op: 'base' | 'join' | 'cut', part }]. Each feature part keeps
+  // its own pos/rot/base inside the body frame; the body's pos/rot/base then place the whole thing in the world.
+  const memo = new Map();
+  function remember(key, fn) { if (memo.has(key)) return memo.get(key); const v = fn(); memo.set(key, v); if (memo.size > 60) memo.delete(memo.keys().next().value); return v; }
+  function featureMesh(part, seg, meshes) { return transformPos(partMesh(part, seg, meshes).pos, rotMatrix(part.rot), part.pos || [0, 0, 0]); }
+  function featureMeshN(part, seg, meshes) { const m = partMesh(part, seg, meshes), R = rotMatrix(part.rot); return { pos: transformPos(m.pos, R, part.pos || [0, 0, 0]), nrm: m.nrm ? transformPos(m.nrm, R, [0, 0, 0]) : null }; }
+  // Body mesh and density-1 props, both in the body frame (before the body's own base shift).
+  function bodyEval(p, seg, meshes) {
+    const key = JSON.stringify([p.children, seg, Object.keys(meshes || {}).length]);
+    return remember(key, () => {
+      let cur = null, raw = null, approx = false;
+      const fs = Math.max(seg || 48, 96);   // mass-property booleans run finer than the display
+      for (const ch of p.children) {
+        const part = ch.part, model = { meshes };
+        const lp = localProps(part, model), R = rotMatrix(part.rot), t = part.pos || [0, 0, 0];
+        const pw = { V: lp.V, c: mulMV(R, lp.c).map((v, i) => v + t[i]), I: mulMM(mulMM(R, lp.I), T(R)) };
+        const fineTool = featureMesh(part, fs, meshes), showTool = featureMeshN(part, seg, meshes);
+        if (!cur) { cur = { show: showTool, fine: { pos: fineTool } }; raw = toRaw(pw); continue; }
+        // overlap of this feature with the body so far: exact when it is all or nothing, else from the meshes
+        const inter = meshProps(csg('intersect', cur.fine, { pos: fineTool }).pos), toolV = meshProps(fineTool).V, curV = meshProps(cur.fine.pos).V;
+        let ov;
+        if (inter.V <= 1e-9 * Math.max(toolV, 1)) ov = null;
+        else if (Math.abs(inter.V - toolV) <= 1e-6 * toolV) ov = toRaw(pw);
+        else if (Math.abs(inter.V - curV) <= 1e-6 * curV) ov = raw;
+        else { ov = toRaw(inter); approx = true; }
+        const op = ch.op === 'cut' ? 'subtract' : 'union';
+        if (ch.op === 'cut') { if (ov) raw = addRaw(raw, ov, -1); }
+        else { raw = addRaw(raw, toRaw(pw), 1); if (ov) raw = addRaw(raw, ov, -1); }
+        cur = { show: csg(op, cur.show, showTool), fine: { pos: csg(op, cur.fine, { pos: fineTool }).pos } };
+      }
+      const pr = fromRaw(raw);
+      return { mesh: cur.show, props: { V: pr.V, A: meshProps(cur.fine.pos).A, c: pr.c, I: pr.I, approx } };
+    });
+  }
+  function bodyMesh(p, seg, meshes) {
+    const e = bodyEval(p, seg, meshes), b = p.base || [0, 0, 0];
+    return { pos: transformPos(e.mesh.pos, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], b.map(x => -x)), nrm: e.mesh.nrm };
+  }
+  function localProps(p, model) {
+    if (p.type === 'mesh') return meshProps(partMesh(p, 0, model.meshes).pos);
+    if (p.type === 'body') { const e = bodyEval(p, model.seg || 48, model.meshes).props, b = p.base || [0, 0, 0]; return { V: e.V, A: e.A, c: e.c.map((x, i) => x - b[i]), I: e.I, approx: e.approx }; }
+    return exactProps(p);
+  }
+  // Re-express a world-placed part inside a body's frame (so it moves with the body afterward).
+  function eulerXYZ(R) {
+    const y = Math.asin(Math.max(-1, Math.min(1, R[0][2])));
+    const [x, z] = Math.abs(R[0][2]) < 0.9999999 ? [Math.atan2(-R[1][2], R[2][2]), Math.atan2(-R[0][1], R[0][0])] : [Math.atan2(R[2][1], R[1][1]), 0];
+    return [x, y, z].map(a => Math.round(a * 180 / PI * 1e6) / 1e6);
+  }
+  function intoBody(body, part) {
+    const Rb = rotMatrix(body.rot), Rbt = T(Rb), pb = body.pos || [0, 0, 0], bb = body.base || [0, 0, 0];
+    const q = JSON.parse(JSON.stringify(part));
+    q.pos = mulMV(Rbt, sub(part.pos || [0, 0, 0], pb)).map((v, i) => Math.round((v + bb[i]) * 1e6) / 1e6);
+    q.rot = eulerXYZ(mulMM(Rbt, rotMatrix(part.rot)));
+    return q;
+  }
+  // Undo intoBody: place a feature part in the world with its body's transform.
+  function outOfBody(body, part) {
+    const Rb = rotMatrix(body.rot), pb = body.pos || [0, 0, 0], bb = body.base || [0, 0, 0], q = JSON.parse(JSON.stringify(part));
+    q.pos = mulMV(Rb, sub(part.pos || [0, 0, 0], bb)).map((v, i) => Math.round((v + pb[i]) * 1e6) / 1e6);
+    q.rot = eulerXYZ(mulMM(Rb, rotMatrix(part.rot)));
+    return q;
+  }
+  // Volume shared by two placed parts (world frame), for deciding what a Join or Cut touches.
+  function overlapVolume(a, b, model) {
+    const ma = { pos: featureMesh(a, 32, model.meshes) }, mb = { pos: featureMesh(b, 32, model.meshes) };
+    return meshProps(csg('intersect', ma, mb).pos).V;
+  }
+
   // ---------- materials (density g/cm³, nominal handbook values) ----------
   const MATERIALS = [
     ['al6061', 'Aluminum 6061', 2.70], ['al7075', 'Aluminum 7075', 2.81], ['steel1018', 'Steel 1018', 7.87],
@@ -506,7 +672,7 @@ const Core = (() => {
   function partInfo(p, model) {
     const problem = dimProblem(p);
     if (problem) return { problem };
-    const local = p.type === 'mesh' ? meshProps(partMesh(p, 0, model.meshes).pos) : exactProps(p);
+    const local = localProps(p, model);
     const rho = density(p) / 1000;                 // g/mm³
     const R = rotMatrix(p.rot), t = p.pos || [0, 0, 0];
     const Il = local.I.map(r => r.map(v => v * rho));
@@ -591,7 +757,7 @@ const Core = (() => {
     return { pos: pos.map((v, i) => Math.round((v - c[i % 3]) * 1e5) / 1e5), center: c };
   }
 
-  return { TYPES, PLANES, MATERIALS, MAT, setTriangulator, sketchLoops, sketchFill, sketchCenter, entLoop, regionMoment, defaultDims, dimProblem, exactProps, partMesh, meshProps, meshCheck, rotMatrix, transformPos, shift, eigSym,
+  return { TYPES, PLANES, MATERIALS, MAT, csg, intoBody, outOfBody, overlapVolume, localProps, eulerXYZ, setTriangulator, sketchLoops, sketchFill, sketchCenter, entLoop, regionMoment, defaultDims, dimProblem, exactProps, partMesh, meshProps, meshCheck, rotMatrix, transformPos, shift, eigSym,
     mulMV, mulMM, T, density, partInfo, solve, worldTriangles, stlBinary, parseSTL, centerMesh, gauss3 };
 })();
 if (typeof module !== 'undefined') module.exports = Core;
