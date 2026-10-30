@@ -1,0 +1,221 @@
+<title>Solid Bench</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--FONTS-->
+<style>
+/* Modeling bench: tool rail left, 3D viewport center, parts + inspector + mass properties right; the math opens in a drawer. */
+:root {
+  --bg: #e8eaf0; --panel: #f7f8fb; --paper: #fdfdfe; --ink: #161827; --ink-2: #4a4e63; --ink-3: #7c8096;
+  --line: #d6d9e4; --accent: #4338ca; --accent-soft: rgba(67, 56, 202, 0.1); --on-accent: #ffffff;
+  --view-top: #f4f5f9; --view-bot: #dfe2eb; --grid-major: #b9bdcc; --grid-minor: #d5d8e2; --edge: #262a3d;
+  --ax-x: #d03b3b; --ax-y: #2f9e44; --ax-z: #2f6fd6; --measure: #c2410c;
+  --warn: #a15c00; --warn-soft: rgba(161, 92, 0, 0.12);
+  --sans: 'IBM Plex Sans', system-ui, sans-serif; --cond: 'IBM Plex Sans Condensed', var(--sans); --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11131b; --panel: #181b25; --paper: #1c1f2b; --ink: #eceef5; --ink-2: #b6bacb; --ink-3: #80859a; --line: #2c3040;
+    --accent: #a5b4fc; --accent-soft: rgba(165, 180, 252, 0.14); --on-accent: #11131b;
+    --view-top: #1d2130; --view-bot: #12141c; --grid-major: #3d4357; --grid-minor: #262b3a; --edge: #0b0c12;
+    --ax-x: #f06060; --ax-y: #51cf66; --ax-z: #5c9cff; --measure: #fb923c; --warn: #f5a524; --warn-soft: rgba(245, 165, 36, 0.13);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11131b; --panel: #181b25; --paper: #1c1f2b; --ink: #eceef5; --ink-2: #b6bacb; --ink-3: #80859a; --line: #2c3040;
+  --accent: #a5b4fc; --accent-soft: rgba(165, 180, 252, 0.14); --on-accent: #11131b;
+  --view-top: #1d2130; --view-bot: #12141c; --grid-major: #3d4357; --grid-minor: #262b3a; --edge: #0b0c12;
+  --ax-x: #f06060; --ax-y: #51cf66; --ax-z: #5c9cff; --measure: #fb923c; --warn: #f5a524; --warn-soft: rgba(245, 165, 36, 0.13);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.app { display: grid; grid-template-columns: 52px minmax(0, 1fr) 330px; grid-template-rows: auto minmax(0, 1fr); gap: 10px; height: 100%;
+  padding-block: 10px max(10px, env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
+header > * { flex: none; }
+header > .brand, header > #status { flex: 0 1 auto; min-width: 0; }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; min-width: 0; }
+h1 { font: 600 20px var(--cond); margin: 0; white-space: nowrap; }
+.btn { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-weight: 500; font-size: 13px; }
+.btn:hover { border-color: var(--accent); }
+.btn svg, .tool svg, .menu-pop svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.icon { padding: 6px 7px; }
+.btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+#status { font: 500 12.5px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 5px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status.bad { color: var(--warn); background: var(--warn-soft); }
+.menu { position: relative; }
+.menu-pop { position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; z-index: 30; min-width: 240px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14); }
+.menu-pop button { display: flex; width: 100%; align-items: center; gap: 8px; background: none; border: 0; border-radius: 6px; padding: 7px 9px; cursor: pointer; text-align: left; }
+.menu-pop button:hover { background: var(--accent-soft); }
+.menu-pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+
+/* tool rail */
+.rail { display: flex; flex-direction: column; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 5px; overflow-y: auto; min-height: 0; }
+.rail hr { border: 0; border-top: 1px solid var(--line); margin: 3px 2px; width: auto; }
+.tool { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid transparent; border-radius: 8px; background: none; cursor: pointer; color: var(--ink-2); flex: none; }
+.tool svg { width: 20px; height: 20px; }
+.tool:hover { border-color: var(--line); color: var(--ink); }
+.tool.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.tool kbd { position: absolute; right: 2px; bottom: 0; font: 500 9px var(--mono); color: var(--ink-3); }
+
+/* viewport */
+.view { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-height: 0; background: linear-gradient(var(--view-top), var(--view-bot)); }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+.viewbar { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none; }
+.viewbar > * { pointer-events: auto; }
+.viewbar .btn { padding: 4px 8px; font-size: 12px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
+.viewbar .grow { flex: 1; pointer-events: none; }
+#readout { position: absolute; left: 8px; bottom: 8px; font: 12px var(--mono); color: var(--ink-2); background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; pointer-events: none; max-width: calc(100% - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hint { position: absolute; right: 8px; bottom: 8px; font-size: 12px; color: var(--ink-3); pointer-events: none; text-align: right; }
+.triad { position: absolute; right: 10px; top: 44px; width: 64px; height: 64px; pointer-events: none; }
+
+/* inspector */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-y: auto; min-width: 0; min-height: 0; }
+h2 { font: 600 11.5px var(--cond); letter-spacing: .09em; text-transform: uppercase; color: var(--accent); margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
+h2:first-child { margin-top: 0; }
+h2 .count { color: var(--ink-3); letter-spacing: 0; font: 12px var(--mono); text-transform: none; }
+#partList { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto; }
+.prow { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+.prow:hover { background: var(--accent-soft); }
+.prow.sel { border-color: var(--accent); background: var(--accent-soft); }
+.prow .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; border: 1px solid rgba(0, 0, 0, 0.2); }
+.prow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow .ty { font: 11.5px var(--mono); color: var(--ink-3); }
+.prow.hid .nm, .prow.hid .ty { opacity: .45; text-decoration: line-through; }
+.prow .eye { background: none; border: 0; padding: 2px; cursor: pointer; color: var(--ink-3); display: grid; }
+.prow .eye svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.empty { color: var(--ink-3); font-size: 13px; }
+.field { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; color: var(--ink-2); font-size: 13px; }
+.field > span:first-child { min-width: 0; }
+.inp { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); padding: 0 8px; width: 150px; flex: none; }
+.inp:focus-within { border-color: var(--accent); }
+.inp input, .inp select { border: 0; background: none; font: 13px var(--mono); width: 100%; padding: 5px 0; outline: none; min-width: 0; }
+.inp select { font-family: var(--sans); }
+.inp em { font-style: normal; color: var(--ink-3); font-size: 11.5px; margin-left: 4px; }
+.xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; width: 190px; flex: none; }
+.xyz .inp { width: auto; padding: 0 5px; }
+.xyz .inp b { font: 600 10.5px var(--mono); margin-right: 3px; }
+.xyz .inp:nth-child(1) b { color: var(--ax-x); } .xyz .inp:nth-child(2) b { color: var(--ax-y); } .xyz .inp:nth-child(3) b { color: var(--ax-z); }
+input[type="color"] { width: 40px; height: 26px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); padding: 2px; cursor: pointer; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.actions .btn { padding: 4px 8px; font-size: 12px; }
+#outputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.stat { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; background: var(--paper); min-width: 0; }
+.stat b { display: block; font: 500 17px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat span { font-size: 11.5px; color: var(--ink-3); }
+.stat.wide { grid-column: 1 / -1; }
+.stat.wide b { font-size: 13.5px; }
+.scope { font-size: 12px; color: var(--ink-3); margin: -2px 0 6px; }
+.warnbox { color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 6px 9px; font-size: 12.5px; margin-top: 8px; }
+.note { color: var(--ink-2); font-size: 12.5px; }
+.note b { color: var(--ink); font-weight: 600; }
+
+/* math drawer */
+#scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.25); z-index: 40; }
+#math { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 41;
+  display: flex; flex-direction: column; transform: translateX(100%); transition: transform .2s ease; padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); }
+#math.open { transform: none; }
+#math header { padding: 14px 18px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+#math header h2 { margin: 0; font-size: 13px; }
+#math header .btn { margin-left: auto; }
+#mathBody { overflow-y: auto; padding: 6px 18px max(24px, env(safe-area-inset-bottom, 0px)); }
+#mathBody details { border-bottom: 1px solid var(--line); padding: 8px 0; }
+#mathBody summary { cursor: pointer; font: 600 15px var(--cond); padding: 4px 0; list-style: none; display: flex; align-items: center; gap: 8px; }
+#mathBody summary::-webkit-details-marker { display: none; }
+#mathBody summary::before { content: ''; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); transition: transform .15s; flex: none; }
+#mathBody details[open] summary::before { transform: rotate(45deg); }
+#mathBody p { color: var(--ink-2); margin: 6px 0; font-size: 13.5px; }
+#mathBody .eqs { font: 13px/1.7 var(--mono); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0; overflow-x: auto; white-space: pre; }
+#mathBody .eqs .sub { color: var(--ink-3); }
+#mathBody .eqs .res { color: var(--accent); font-weight: 500; }
+#toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; max-width: calc(100vw - 32px); z-index: 50; font-size: 13px; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { #math { transition: none; } }
+@media (max-width: 1100px) { .app { grid-template-columns: 52px minmax(0, 1fr) 290px; } .lbl { display: none; } }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto 62vh auto; height: auto; }
+  header { flex-wrap: wrap; } header > .brand { flex: 1 1 100%; } #status { flex: 1 1 100%; order: 9; }
+  .rail { flex-direction: row; flex-wrap: wrap; justify-content: center; overflow: visible; }
+  .rail hr { border-top: 0; border-left: 1px solid var(--line); margin: 2px 3px; }
+  .panel { overflow: visible; } .triad { display: none; } #hint { display: none; }
+}
+</style>
+<div class="app">
+  <header>
+    <div class="brand"><h1>Solid Bench</h1></div>
+    <select id="presetSel" class="btn" aria-label="Examples"><option value="">Examples…</option></select>
+    <button class="btn icon" id="undoBtn" title="Undo (⌘Z)" aria-label="Undo"><svg viewBox="0 0 16 16"><path d="M5 3 2 6l3 3"/><path d="M2 6h7.5a4 4 0 0 1 0 8H7"/></svg></button>
+    <button class="btn icon" id="redoBtn" title="Redo (⇧⌘Z)" aria-label="Redo"><svg viewBox="0 0 16 16"><path d="m11 3 3 3-3 3"/><path d="M14 6H6.5a4 4 0 0 0 0 8H9"/></svg></button>
+    <div class="menu">
+      <button class="btn" id="fileBtn" aria-haspopup="true"><svg viewBox="0 0 16 16"><path d="M3 2h6l4 4v8H3z"/><path d="M9 2v4h4"/></svg><span class="lbl">File</span></button>
+      <div class="menu-pop" id="fileMenu" hidden>
+        <button data-act="new"><svg viewBox="0 0 16 16"><path d="M3 2h6l4 4v8H3z"/><path d="M8 8v4M6 10h4"/></svg>New empty model</button>
+        <button data-act="open"><svg viewBox="0 0 16 16"><path d="M2 4h4l1.5 1.5H14V13H2z"/></svg>Open model (.json) or import STL…</button>
+        <button data-act="save"><svg viewBox="0 0 16 16"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 12v2h10v-2"/></svg>Save model (.json)</button>
+        <hr>
+        <button data-act="stl"><svg viewBox="0 0 16 16"><path d="M8 2 14 5v6l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3M8 8v6"/></svg>Export STL (visible parts)</button>
+        <button data-act="stlsel"><svg viewBox="0 0 16 16"><path d="M8 2 14 5v6l-6 3-6-3V5z"/><path d="M8 8v6"/></svg>Export STL (selected part)</button>
+        <button data-act="csv"><svg viewBox="0 0 16 16"><path d="M2 3h12v10H2zM2 7h12M6 3v10"/></svg>Mass properties (.csv)</button>
+        <button data-act="png"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="m4 11 3-3 2 2 2-2 2 3"/></svg>Picture of the view (.png)</button>
+      </div>
+    </div>
+    <button class="btn primary" id="mathBtn"><svg viewBox="0 0 16 16"><path d="M3 3h7M3 3l4 5-4 5h7"/><path d="M11.5 9.5 14 12M14 9.5 11.5 12"/></svg><span class="lbl">Show the math</span></button>
+    <span id="status"></span>
+  </header>
+  <nav class="rail" aria-label="Tools">
+    <button class="tool" data-tool="select" title="Select (V)" aria-label="Select"><svg viewBox="0 0 20 20"><path d="M5 3l10 6.5-4.5 1L13 16l-2 1-2.5-5.5L5 15z"/></svg><kbd>V</kbd></button>
+    <button class="tool" data-tool="move" title="Move (G)" aria-label="Move"><svg viewBox="0 0 20 20"><path d="M10 2v16M2 10h16M10 2 8 4.5M10 2l2 2.5M10 18l-2-2.5M10 18l2-2.5M2 10l2.5-2M2 10l2.5 2M18 10l-2.5-2M18 10l-2.5 2"/></svg><kbd>G</kbd></button>
+    <button class="tool" data-tool="rotate" title="Rotate (R)" aria-label="Rotate"><svg viewBox="0 0 20 20"><path d="M16 10a6 6 0 1 1-2-4.5"/><path d="M14.5 2.5 14 5.5l3 .5"/></svg><kbd>R</kbd></button>
+    <button class="tool" data-tool="measure" title="Measure distance (M)" aria-label="Measure"><svg viewBox="0 0 20 20"><path d="M2.5 13.5 13.5 2.5l4 4-11 11z"/><path d="M6 10l1.5 1.5M8.5 7.5 10 9M11 5l1.5 1.5"/></svg><kbd>M</kbd></button>
+    <hr>
+    <button class="tool" data-add="box" title="Add box (1)" aria-label="Add box"><svg viewBox="0 0 20 20"><path d="M10 2.5 17 6v8l-7 3.5L3 14V6z"/><path d="M3 6l7 3.5L17 6M10 9.5v8"/></svg><kbd>1</kbd></button>
+    <button class="tool" data-add="cylinder" title="Add cylinder (2)" aria-label="Add cylinder"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/></svg><kbd>2</kbd></button>
+    <button class="tool" data-add="tube" title="Add tube (3)" aria-label="Add tube"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><ellipse cx="10" cy="5" rx="3" ry="1.2"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5"/></svg><kbd>3</kbd></button>
+    <button class="tool" data-add="sphere" title="Add sphere (4)" aria-label="Add sphere"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M3 10c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg><kbd>4</kbd></button>
+    <button class="tool" data-add="cone" title="Add cone (5)" aria-label="Add cone"><svg viewBox="0 0 20 20"><path d="M10 2.5 4 15M10 2.5 16 15"/><path d="M4 15c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5-2.7-2.5-6-2.5S4 13.6 4 15z"/></svg><kbd>5</kbd></button>
+    <button class="tool" data-add="torus" title="Add torus (6)" aria-label="Add torus"><svg viewBox="0 0 20 20"><ellipse cx="10" cy="10" rx="8" ry="4.5"/><path d="M6.5 9.5c1 1.3 6 1.3 7 0M7.5 10.6c1-.7 4-.7 5 0"/></svg><kbd>6</kbd></button>
+  </nav>
+  <div class="view">
+    <canvas id="cv" tabindex="0" aria-label="3D view"></canvas>
+    <div class="viewbar">
+      <button class="btn" data-view="iso" title="Isometric (0)">Iso</button>
+      <button class="btn" data-view="front" title="Front, looking down −Z">Front</button>
+      <button class="btn" data-view="top" title="Top, looking down −Y">Top</button>
+      <button class="btn" data-view="right" title="Right, looking down −X">Right</button>
+      <button class="btn" data-view="fit" title="Fit all (F)">Fit</button>
+      <span class="grow"></span>
+      <button class="btn" id="orthoBtn" title="Orthographic / perspective (O)">Ortho</button>
+      <button class="btn" id="edgesBtn" title="Show edges">Edges</button>
+      <select class="btn" id="snapSel" aria-label="Move snap" title="Move snap"><option value="0">Snap off</option><option value="0.5">Snap 0.5 mm</option><option value="1">Snap 1 mm</option><option value="5" selected>Snap 5 mm</option><option value="10">Snap 10 mm</option></select>
+    </div>
+    <svg class="triad" id="triad" viewBox="-32 -32 64 64" aria-hidden="true"></svg>
+    <div id="readout" hidden></div>
+    <div id="hint"></div>
+  </div>
+  <aside class="panel" aria-label="Parts and properties">
+    <h2>Parts <span class="count" id="partCount"></span></h2>
+    <div id="partList"></div>
+    <h2 id="inspTitle">Part</h2>
+    <div id="inspector"></div>
+    <h2>Mass properties</h2>
+    <div class="scope" id="massScope"></div>
+    <div id="outputs"></div>
+    <div id="warns"></div>
+    <h2>Method</h2>
+    <p class="note">Units are mm, g and g/cm³. Each part is a parametric primitive whose <b>volume, area, center of mass and inertia tensor come from closed-form formulas</b>, then are rotated (R·I·Rᵀ) and combined with the parallel-axis theorem. Imported STL meshes are integrated triangle by triangle (divergence theorem) and must be watertight. All of it is checked against textbook answers; the faceted display mesh is shown against the exact value in the math drawer.</p>
+    <p class="note"><b>Limits:</b> primitives only, no booleans, fillets or sketches yet. Overlapping parts are counted twice. Hidden parts are left out of mass properties and STL export. The bounding box comes from the display mesh. Densities are nominal handbook values.</p>
+  </aside>
+</div>
+<div id="scrim" hidden></div>
+<section id="math" aria-label="The math" aria-hidden="true">
+  <header><h2>The math</h2><span class="note" id="mathSub"></span><button class="btn icon" id="mathClose" aria-label="Close"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></header>
+  <div id="mathBody"></div>
+</section>
+<input type="file" id="fileIn" accept=".json,.stl,application/json,model/stl" hidden>
+<div id="toast" hidden></div>
+<!--SCRIPTS-->

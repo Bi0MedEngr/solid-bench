@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- An isometric block with a bored hole: a solid you model and weigh. -->
+  <rect width="512" height="512" fill="#4338ca"/>
+  <g fill="none" stroke="#eef0fb" stroke-width="22" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M256 92 410 181v178L256 448 102 359V181z"/>
+    <path d="M102 181l154 89 154-89M256 270v178"/>
+  </g>
+  <ellipse cx="256" cy="181" rx="62" ry="36" fill="none" stroke="#fbbf24" stroke-width="20"/>
+</svg>
